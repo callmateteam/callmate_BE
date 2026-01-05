@@ -1,0 +1,40 @@
+# FastAPI Core
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Database
+sqlalchemy==2.0.25
+alembic==1.13.1
+psycopg2-binary==2.9.9
+
+# Redis
+redis==5.0.1
+hiredis==2.3.2
+
+# OpenAI & AI
+openai==1.10.0
+anthropic==0.8.1
+google-generativeai==0.8.0  # Gemini API
+tiktoken==0.5.2  # Token counting for prompts
+
+# Audio Processing & STT
+python-multipart==0.0.6
+assemblyai==0.17.0  # Speaker diarization & STT
+
+# Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.0
+
+# CORS
+python-cors==1.0.0
+
+# Utilities
+httpx==0.26.0
+aiofiles==23.2.1
+
+# PDF Processing
+pypdf2==3.0.1
+pdfplumber==0.10.3
