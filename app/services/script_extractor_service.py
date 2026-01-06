@@ -1,113 +1,98 @@
 """
 Script extractor service for MVP.
 Supports two input methods:
-1. Markdown text from frontend
+1. Form input from frontend (4-step wizard)
 2. PDF file upload
 """
 
 from typing import Dict, List, Optional
-from enum import Enum
 import re
 from app.services.pdf_service import pdf_service
-
-
-class ScriptInputType(str, Enum):
-    """스크립트 입력 방식"""
-    MARKDOWN = "markdown"
-    PDF = "pdf"
+from app.schemas.script import (
+    ConsultationType,
+    ToneStyle,
+    FormScriptRequest,
+    InformationDetails,
+    SalesDetails,
+    ComplaintDetails,
+    ToneSettings
+)
 
 
 class ScriptExtractorService:
     """
     MVP용 스크립트 추출 서비스.
-    마크다운 텍스트 또는 PDF에서 영업 스크립트 정보를 추출합니다.
+    폼 입력 또는 PDF에서 영업 스크립트 정보를 추출합니다.
     """
 
-    def extract_from_markdown(self, markdown_text: str) -> Dict:
+    def extract_from_form(self, request: FormScriptRequest) -> Dict:
         """
-        마크다운 텍스트에서 스크립트 정보 추출
-
-        프론트엔드에서 다음 형식으로 전달:
-        ```
-        # 회사명
-
-        ## 인사말
-        - "안녕하세요, OO입니다"
-
-        ## 상품 소개
-        - 특장점 1
-        - 특장점 2
-
-        ## 자주 묻는 질문
-        ### Q: 가격이 얼마인가요?
-        A: 월 9,900원입니다.
-
-        ## 클로징 멘트
-        - "감사합니다. 좋은 하루 되세요"
-        ```
+        폼 입력에서 스크립트 정보 추출
 
         Args:
-            markdown_text: 마크다운 형식의 스크립트 텍스트
+            request: FormScriptRequest (4단계 폼 데이터)
 
         Returns:
             추출된 스크립트 정보 딕셔너리
         """
         result = {
-            "company_name": "",
-            "greeting": [],
-            "product_info": [],
+            "company_name": request.company_name,
+            "consultation_type": request.consultation_type.value,
+            "product_name": "",
+            "key_features": [],
             "faq": [],
-            "closing": [],
-            "key_phrases": [],
-            "objection_handling": [],
-            "raw_text": markdown_text
+            "pricing_info": [],
+            "competitive_advantages": [],
+            "objection_responses": [],
+            "common_problems": [],
+            "compensation_options": [],
+            "escalation_criteria": [],
+            "tone_style": None,
+            "forbidden_phrases": [],
+            "required_phrases": [],
+            "key_phrases": []
         }
 
-        # 회사명 추출 (# 제목)
-        company_match = re.search(r'^#\s+(.+?)$', markdown_text, re.MULTILINE)
-        if company_match:
-            result["company_name"] = company_match.group(1).strip()
+        # 3단계: 유형별 세부 정보
+        if request.consultation_type == ConsultationType.INFORMATION:
+            if request.information_details:
+                details = request.information_details
+                result["product_name"] = details.product_name
+                result["key_features"] = details.key_features
+                result["faq"] = [
+                    {"question": qa.question, "answer": qa.answer}
+                    for qa in details.faq
+                ]
 
-        # 섹션별 추출
-        sections = self._parse_markdown_sections(markdown_text)
+        elif request.consultation_type == ConsultationType.SALES:
+            if request.sales_details:
+                details = request.sales_details
+                result["product_name"] = details.product_name
+                result["key_features"] = details.key_features
+                result["pricing_info"] = details.pricing_info
+                result["competitive_advantages"] = details.competitive_advantages
+                result["objection_responses"] = [
+                    {"objection": obj.objection, "response": obj.response}
+                    for obj in details.objection_responses
+                ]
 
-        # 인사말 섹션
-        greeting_keys = ["인사말", "인사", "오프닝", "opening"]
-        for key in greeting_keys:
-            if key in sections:
-                result["greeting"] = self._extract_list_items(sections[key])
-                break
+        elif request.consultation_type == ConsultationType.COMPLAINT:
+            if request.complaint_details:
+                details = request.complaint_details
+                result["common_problems"] = [
+                    {"problem": ps.problem, "solution": ps.solution}
+                    for ps in details.common_problems
+                ]
+                result["compensation_options"] = details.compensation_options
+                result["escalation_criteria"] = details.escalation_criteria
 
-        # 상품 소개 섹션
-        product_keys = ["상품 소개", "상품소개", "제품 소개", "서비스 소개", "특장점"]
-        for key in product_keys:
-            if key in sections:
-                result["product_info"] = self._extract_list_items(sections[key])
-                break
-
-        # FAQ 섹션
-        faq_keys = ["자주 묻는 질문", "faq", "q&a", "질문과 답변"]
-        for key in faq_keys:
-            if key in sections:
-                result["faq"] = self._extract_qa_pairs(sections[key])
-                break
-
-        # 클로징 섹션
-        closing_keys = ["클로징", "마무리", "closing", "엔딩"]
-        for key in closing_keys:
-            if key in sections:
-                result["closing"] = self._extract_list_items(sections[key])
-                break
-
-        # 반대 처리 섹션
-        objection_keys = ["반대 처리", "이의 제기", "거절 응대", "objection"]
-        for key in objection_keys:
-            if key in sections:
-                result["objection_handling"] = self._extract_list_items(sections[key])
-                break
-
-        # 전체에서 핵심 멘트 추출 (따옴표 안의 내용)
-        result["key_phrases"] = self._extract_quoted_phrases(markdown_text)
+        # 4단계: 톤 & 추가 설정 (선택)
+        if request.tone_settings:
+            tone = request.tone_settings
+            result["tone_style"] = tone.tone_style.value if tone.tone_style else None
+            result["forbidden_phrases"] = tone.forbidden_phrases
+            result["required_phrases"] = tone.required_phrases
+            result["key_phrases"] = tone.key_phrases
 
         return result
 
@@ -126,12 +111,20 @@ class ScriptExtractorService:
 
         result = {
             "company_name": "",
-            "greeting": [],
-            "product_info": [],
+            "consultation_type": None,
+            "product_name": "",
+            "key_features": [],
             "faq": [],
-            "closing": [],
+            "pricing_info": [],
+            "competitive_advantages": [],
+            "objection_responses": [],
+            "common_problems": [],
+            "compensation_options": [],
+            "escalation_criteria": [],
+            "tone_style": None,
+            "forbidden_phrases": [],
+            "required_phrases": [],
             "key_phrases": parsed.get("key_phrases", []),
-            "objection_handling": [],
             "raw_text": parsed.get("full_text", ""),
             "sections": parsed.get("sections", {}),
             "page_count": parsed.get("page_count", 0)
@@ -144,16 +137,22 @@ class ScriptExtractorService:
             section_lower = section_name.lower()
             items = self._extract_list_items(content)
 
-            if any(k in section_lower for k in ["인사", "오프닝"]):
-                result["greeting"] = items
-            elif any(k in section_lower for k in ["상품", "제품", "서비스"]):
-                result["product_info"] = items
+            if any(k in section_lower for k in ["상품", "제품", "서비스", "특장점"]):
+                result["key_features"] = items
             elif any(k in section_lower for k in ["faq", "질문"]):
                 result["faq"] = self._extract_qa_pairs(content)
-            elif any(k in section_lower for k in ["마무리", "클로징"]):
-                result["closing"] = items
+            elif any(k in section_lower for k in ["가격", "요금", "혜택"]):
+                result["pricing_info"] = items
+            elif any(k in section_lower for k in ["경쟁", "비교", "장점"]):
+                result["competitive_advantages"] = items
             elif any(k in section_lower for k in ["반대", "이의", "거절"]):
-                result["objection_handling"] = items
+                result["objection_responses"] = self._extract_objection_pairs(content)
+            elif any(k in section_lower for k in ["문제", "불만", "클레임"]):
+                result["common_problems"] = self._extract_problem_solution_pairs(content)
+            elif any(k in section_lower for k in ["보상", "대안"]):
+                result["compensation_options"] = items
+            elif any(k in section_lower for k in ["에스컬", "상위", "담당자"]):
+                result["escalation_criteria"] = items
 
         return result
 
@@ -173,78 +172,121 @@ class ScriptExtractorService:
             프롬프트에 주입할 컨텍스트 문자열
         """
         name = company_name or extracted_data.get("company_name", "고객사")
+        consultation_type = extracted_data.get("consultation_type")
 
-        context_parts = [f"## {name} 영업 스크립트 가이드\n"]
+        # 상담 유형별 라벨
+        type_labels = {
+            "information": "안내/정보 제공",
+            "sales": "판매/유지/설득",
+            "complaint": "불만/문제 해결"
+        }
+        type_label = type_labels.get(consultation_type, "일반 상담")
 
-        # 인사말
-        if extracted_data.get("greeting"):
-            context_parts.append("### 인사말 예시")
-            for phrase in extracted_data["greeting"][:5]:
-                context_parts.append(f"- {phrase}")
+        context_parts = [
+            f"## {name} 스크립트 가이드",
+            f"**상담 유형**: {type_label}\n"
+        ]
+
+        # 제품/서비스명
+        if extracted_data.get("product_name"):
+            context_parts.append(f"**제품/서비스**: {extracted_data['product_name']}\n")
+
+        # 주요 특장점
+        if extracted_data.get("key_features"):
+            context_parts.append("### 주요 특장점")
+            for feature in extracted_data["key_features"][:5]:
+                context_parts.append(f"- {feature}")
             context_parts.append("")
 
-        # 상품 정보
-        if extracted_data.get("product_info"):
-            context_parts.append("### 상품/서비스 특장점")
-            for info in extracted_data["product_info"][:10]:
+        # 가격/혜택 정보 (판매용)
+        if extracted_data.get("pricing_info"):
+            context_parts.append("### 가격/혜택 정보")
+            for info in extracted_data["pricing_info"][:5]:
                 context_parts.append(f"- {info}")
+            context_parts.append("")
+
+        # 경쟁사 대비 장점 (판매용)
+        if extracted_data.get("competitive_advantages"):
+            context_parts.append("### 경쟁사 대비 장점")
+            for adv in extracted_data["competitive_advantages"][:5]:
+                context_parts.append(f"- {adv}")
             context_parts.append("")
 
         # FAQ
         if extracted_data.get("faq"):
-            context_parts.append("### 자주 묻는 질문 응대")
+            context_parts.append("### FAQ 응대")
             for qa in extracted_data["faq"][:5]:
                 if isinstance(qa, dict):
                     context_parts.append(f"Q: {qa.get('question', '')}")
                     context_parts.append(f"A: {qa.get('answer', '')}")
-                else:
-                    context_parts.append(f"- {qa}")
+                    context_parts.append("")
             context_parts.append("")
 
-        # 반대 처리
-        if extracted_data.get("objection_handling"):
-            context_parts.append("### 거절/반대 시 응대")
-            for obj in extracted_data["objection_handling"][:5]:
-                context_parts.append(f"- {obj}")
+        # 거절 대응 (판매용)
+        if extracted_data.get("objection_responses"):
+            context_parts.append("### 거절 시 응대")
+            for obj in extracted_data["objection_responses"][:5]:
+                if isinstance(obj, dict):
+                    context_parts.append(f"거절: \"{obj.get('objection', '')}\"")
+                    context_parts.append(f"응대: \"{obj.get('response', '')}\"")
+                    context_parts.append("")
             context_parts.append("")
 
-        # 클로징
-        if extracted_data.get("closing"):
-            context_parts.append("### 마무리 멘트")
-            for phrase in extracted_data["closing"][:3]:
-                context_parts.append(f"- {phrase}")
+        # 문제 해결 (불만용)
+        if extracted_data.get("common_problems"):
+            context_parts.append("### 문제 해결 가이드")
+            for ps in extracted_data["common_problems"][:5]:
+                if isinstance(ps, dict):
+                    context_parts.append(f"문제: {ps.get('problem', '')}")
+                    context_parts.append(f"해결: {ps.get('solution', '')}")
+                    context_parts.append("")
+            context_parts.append("")
+
+        # 보상 옵션 (불만용)
+        if extracted_data.get("compensation_options"):
+            context_parts.append("### 보상/대안 제시 가능 범위")
+            for opt in extracted_data["compensation_options"][:5]:
+                context_parts.append(f"- {opt}")
+            context_parts.append("")
+
+        # 에스컬레이션 기준 (불만용)
+        if extracted_data.get("escalation_criteria"):
+            context_parts.append("### 에스컬레이션 기준")
+            for crit in extracted_data["escalation_criteria"][:5]:
+                context_parts.append(f"- {crit}")
+            context_parts.append("")
+
+        # 톤 설정 (4단계)
+        tone_style = extracted_data.get("tone_style")
+        if tone_style:
+            tone_labels = {
+                "formal": "격식체",
+                "friendly": "친근체",
+                "professional": "전문가 스타일"
+            }
+            context_parts.append(f"### 말투 스타일: {tone_labels.get(tone_style, tone_style)}\n")
+
+        # 금지 표현
+        if extracted_data.get("forbidden_phrases"):
+            context_parts.append("### 금지 표현 (사용하지 마세요)")
+            for phrase in extracted_data["forbidden_phrases"][:10]:
+                context_parts.append(f"- \"{phrase}\"")
+            context_parts.append("")
+
+        # 필수 포함 멘트
+        if extracted_data.get("required_phrases"):
+            context_parts.append("### 필수 포함 멘트")
+            for phrase in extracted_data["required_phrases"][:10]:
+                context_parts.append(f"- \"{phrase}\"")
             context_parts.append("")
 
         # 핵심 멘트
         if extracted_data.get("key_phrases"):
-            context_parts.append("### 권장 핵심 멘트")
+            context_parts.append("### 핵심 멘트 (적극 활용)")
             for phrase in extracted_data["key_phrases"][:10]:
                 context_parts.append(f"- \"{phrase}\"")
 
         return "\n".join(context_parts)
-
-    def _parse_markdown_sections(self, markdown_text: str) -> Dict[str, str]:
-        """마크다운에서 ## 섹션 파싱"""
-        sections = {}
-
-        # ## 헤더로 분할
-        pattern = r'^##\s+(.+?)$'
-        matches = list(re.finditer(pattern, markdown_text, re.MULTILINE))
-
-        for i, match in enumerate(matches):
-            section_name = match.group(1).strip().lower()
-            start = match.end()
-
-            # 다음 섹션까지 또는 끝까지
-            if i + 1 < len(matches):
-                end = matches[i + 1].start()
-            else:
-                end = len(markdown_text)
-
-            content = markdown_text[start:end].strip()
-            sections[section_name] = content
-
-        return sections
 
     def _extract_list_items(self, text: str) -> List[str]:
         """텍스트에서 리스트 아이템 추출 (-, *, 숫자.)"""
@@ -314,6 +356,38 @@ class ScriptExtractorService:
             })
 
         return qa_pairs
+
+    def _extract_objection_pairs(self, text: str) -> List[Dict[str, str]]:
+        """거절-응대 쌍 추출"""
+        pairs = []
+
+        # 거절: 응대: 패턴
+        pattern = r'(?:거절|반대)\s*[:：]\s*(.+?)(?:\n|$)\s*(?:응대|대응)\s*[:：]\s*(.+?)(?:\n\n|\n(?=거절)|$)'
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+
+        for objection, response in matches:
+            pairs.append({
+                "objection": objection.strip(),
+                "response": response.strip()
+            })
+
+        return pairs
+
+    def _extract_problem_solution_pairs(self, text: str) -> List[Dict[str, str]]:
+        """문제-해결 쌍 추출"""
+        pairs = []
+
+        # 문제: 해결: 패턴
+        pattern = r'(?:문제|상황)\s*[:：]\s*(.+?)(?:\n|$)\s*(?:해결|대응|조치)\s*[:：]\s*(.+?)(?:\n\n|\n(?=문제)|$)'
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+
+        for problem, solution in matches:
+            pairs.append({
+                "problem": problem.strip(),
+                "solution": solution.strip()
+            })
+
+        return pairs
 
 
 # Global instance

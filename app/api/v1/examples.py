@@ -165,11 +165,3 @@ COMPREHENSIVE_ANALYSIS_EXAMPLE = {
     "confidence_score": 0.85
 }
 
-QUICK_ANALYSIS_EXAMPLE = {
-    "transcript_id": "abc123-def456-ghi789",
-    "summary": "고객이 가족 건강보험 상담을 요청하여 긍정적으로 검토 중",
-    "customer_state": "관심 있음",
-    "overall_sentiment": "긍정",
-    "key_needs": ["가족 전체 보장", "합리적인 가격", "암 보장 포함"],
-    "next_action": "견적서 발송 후 3일 내 후속 전화"
-}

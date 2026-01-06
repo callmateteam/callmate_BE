@@ -1,6 +1,6 @@
 """
 Script extraction API endpoints for MVP.
-Supports markdown text and PDF file inputs.
+Supports form input (4-step wizard) and PDF file inputs.
 """
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -9,11 +9,15 @@ import tempfile
 import os
 
 from app.schemas.script import (
-    MarkdownScriptRequest,
+    FormScriptRequest,
     ScriptExtractionResponse,
     ExtractedScript,
     ScriptInputType,
-    QAPair
+    ConsultationType,
+    ToneStyle,
+    QAPair,
+    ObjectionResponse,
+    ProblemSolution
 )
 from app.services.script_extractor_service import script_extractor_service
 
@@ -21,92 +25,77 @@ router = APIRouter(prefix="/scripts", tags=["scripts"])
 
 
 @router.post(
-    "/extract/markdown",
+    "/extract/form",
     response_model=ScriptExtractionResponse,
-    summary="마크다운에서 스크립트 추출",
-    description="프론트엔드에서 전달한 마크다운 텍스트에서 영업 스크립트 정보를 추출합니다."
+    summary="폼 입력으로 스크립트 생성 (4단계)",
+    description="프론트엔드 4단계 폼에서 입력받은 데이터로 스크립트 컨텍스트를 생성합니다."
 )
-async def extract_from_markdown(request: MarkdownScriptRequest):
+async def extract_from_form(request: FormScriptRequest):
     """
-    마크다운 텍스트에서 스크립트 정보 추출
+    폼 입력 방식으로 스크립트 컨텍스트 생성 (4단계 위자드)
 
-    ## 지원하는 마크다운 형식
-
-    ```markdown
-    # 회사명
-
-    ## 인사말
-    - "인사말 1"
-    - "인사말 2"
-
-    ## 상품 소개
-    - 특장점 1
-    - 특장점 2
-
-    ## 자주 묻는 질문
-    ### Q: 질문 내용
-    A: 답변 내용
-
-    ## 클로징 멘트
-    - "마무리 멘트"
-    ```
+    ## 입력 단계
+    1. **기본 정보**: company_name (회사명 또는 이름)
+    2. **상담 유형**: consultation_type (information/sales/complaint)
+    3. **세부 정보**: 유형에 따라 다른 필드
+       - information: information_details
+       - sales: sales_details
+       - complaint: complaint_details
+    4. **톤 & 설정** (선택): tone_settings
 
     ## 반환값
-    - `extracted`: 섹션별로 파싱된 스크립트 정보
+    - `extracted`: 입력한 스크립트 정보
     - `prompt_context`: AI 분석 시 사용할 컨텍스트 문자열
     """
-    try:
-        # 마크다운에서 추출
-        extracted_data = script_extractor_service.extract_from_markdown(
-            request.markdown_text
-        )
+    # 폼 데이터에서 추출
+    extracted_data = script_extractor_service.extract_from_form(request)
 
-        # 회사명 오버라이드
-        if request.company_name:
-            extracted_data["company_name"] = request.company_name
+    # 프롬프트 컨텍스트 생성
+    prompt_context = script_extractor_service.generate_prompt_context(
+        extracted_data,
+        request.company_name
+    )
 
-        # 프롬프트 컨텍스트 생성
-        prompt_context = script_extractor_service.generate_prompt_context(
-            extracted_data,
-            request.company_name
-        )
+    # ExtractedScript 객체 생성
+    extracted = ExtractedScript(
+        company_name=extracted_data["company_name"],
+        consultation_type=ConsultationType(extracted_data["consultation_type"]) if extracted_data.get("consultation_type") else None,
+        product_name=extracted_data.get("product_name", ""),
+        key_features=extracted_data.get("key_features", []),
+        faq=[QAPair(**qa) for qa in extracted_data.get("faq", [])],
+        pricing_info=extracted_data.get("pricing_info", []),
+        competitive_advantages=extracted_data.get("competitive_advantages", []),
+        objection_responses=[ObjectionResponse(**obj) for obj in extracted_data.get("objection_responses", [])],
+        common_problems=[ProblemSolution(**ps) for ps in extracted_data.get("common_problems", [])],
+        compensation_options=extracted_data.get("compensation_options", []),
+        escalation_criteria=extracted_data.get("escalation_criteria", []),
+        tone_style=ToneStyle(extracted_data["tone_style"]) if extracted_data.get("tone_style") else None,
+        forbidden_phrases=extracted_data.get("forbidden_phrases", []),
+        required_phrases=extracted_data.get("required_phrases", []),
+        key_phrases=extracted_data.get("key_phrases", [])
+    )
 
-        # FAQ 형식 변환
-        faq_list = []
-        for qa in extracted_data.get("faq", []):
-            if isinstance(qa, dict):
-                faq_list.append(QAPair(
-                    question=qa.get("question", ""),
-                    answer=qa.get("answer", "")
-                ))
+    # 메타데이터 계산
+    total_items = (
+        len(extracted_data.get("key_features", [])) +
+        len(extracted_data.get("faq", [])) +
+        len(extracted_data.get("pricing_info", [])) +
+        len(extracted_data.get("objection_responses", [])) +
+        len(extracted_data.get("common_problems", [])) +
+        len(extracted_data.get("key_phrases", []))
+    )
 
-        return ScriptExtractionResponse(
-            success=True,
-            input_type=ScriptInputType.MARKDOWN,
-            extracted=ExtractedScript(
-                company_name=extracted_data.get("company_name", ""),
-                greeting=extracted_data.get("greeting", []),
-                product_info=extracted_data.get("product_info", []),
-                faq=faq_list,
-                closing=extracted_data.get("closing", []),
-                key_phrases=extracted_data.get("key_phrases", []),
-                objection_handling=extracted_data.get("objection_handling", [])
-            ),
-            prompt_context=prompt_context,
-            metadata={
-                "char_count": len(request.markdown_text),
-                "sections_found": len([
-                    k for k in ["greeting", "product_info", "faq", "closing"]
-                    if extracted_data.get(k)
-                ])
-            }
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"마크다운 파싱 실패: {str(e)}"
-        )
+    return ScriptExtractionResponse(
+        success=True,
+        input_type=ScriptInputType.FORM,
+        extracted=extracted,
+        prompt_context=prompt_context,
+        metadata={
+            "consultation_type": extracted_data.get("consultation_type"),
+            "total_items": total_items,
+            "has_tone_settings": request.tone_settings is not None
+        }
+    )
 
 
 @router.post(
@@ -171,27 +160,29 @@ async def extract_from_pdf(
                 company_name
             )
 
-            # FAQ 형식 변환
-            faq_list = []
-            for qa in extracted_data.get("faq", []):
-                if isinstance(qa, dict):
-                    faq_list.append(QAPair(
-                        question=qa.get("question", ""),
-                        answer=qa.get("answer", "")
-                    ))
+            # ExtractedScript 객체 생성
+            extracted = ExtractedScript(
+                company_name=extracted_data.get("company_name", ""),
+                consultation_type=ConsultationType(extracted_data["consultation_type"]) if extracted_data.get("consultation_type") else None,
+                product_name=extracted_data.get("product_name", ""),
+                key_features=extracted_data.get("key_features", []),
+                faq=[QAPair(**qa) for qa in extracted_data.get("faq", []) if isinstance(qa, dict)],
+                pricing_info=extracted_data.get("pricing_info", []),
+                competitive_advantages=extracted_data.get("competitive_advantages", []),
+                objection_responses=[ObjectionResponse(**obj) for obj in extracted_data.get("objection_responses", []) if isinstance(obj, dict)],
+                common_problems=[ProblemSolution(**ps) for ps in extracted_data.get("common_problems", []) if isinstance(ps, dict)],
+                compensation_options=extracted_data.get("compensation_options", []),
+                escalation_criteria=extracted_data.get("escalation_criteria", []),
+                tone_style=ToneStyle(extracted_data["tone_style"]) if extracted_data.get("tone_style") else None,
+                forbidden_phrases=extracted_data.get("forbidden_phrases", []),
+                required_phrases=extracted_data.get("required_phrases", []),
+                key_phrases=extracted_data.get("key_phrases", [])
+            )
 
             return ScriptExtractionResponse(
                 success=True,
                 input_type=ScriptInputType.PDF,
-                extracted=ExtractedScript(
-                    company_name=extracted_data.get("company_name", ""),
-                    greeting=extracted_data.get("greeting", []),
-                    product_info=extracted_data.get("product_info", []),
-                    faq=faq_list,
-                    closing=extracted_data.get("closing", []),
-                    key_phrases=extracted_data.get("key_phrases", []),
-                    objection_handling=extracted_data.get("objection_handling", [])
-                ),
+                extracted=extracted,
                 prompt_context=prompt_context,
                 metadata={
                     "filename": file.filename,
@@ -210,60 +201,3 @@ async def extract_from_pdf(
             status_code=400,
             detail=f"PDF 파싱 실패: {str(e)}"
         )
-
-
-@router.get(
-    "/template/markdown",
-    summary="마크다운 템플릿 반환",
-    description="프론트엔드에서 사용할 마크다운 스크립트 템플릿을 반환합니다."
-)
-async def get_markdown_template():
-    """
-    마크다운 스크립트 작성 템플릿 반환
-
-    프론트엔드에서 이 템플릿을 보여주고,
-    사용자가 채워서 /extract/markdown API로 전송
-    """
-    template = """# 회사명을 입력하세요
-
-## 인사말
-- "안녕하세요, [회사명] [담당자명]입니다."
-- "전화 주셔서 감사합니다."
-
-## 상품 소개
-- 핵심 특장점 1
-- 핵심 특장점 2
-- 핵심 특장점 3
-
-## 자주 묻는 질문
-### Q: 가격이 얼마인가요?
-A: [가격 정보를 입력하세요]
-
-### Q: 배송은 얼마나 걸리나요?
-A: [배송 정보를 입력하세요]
-
-## 반대 처리
-- 가격이 비싸다고 할 때: "고객님, 가성비 측면에서 보시면..."
-- 생각해보겠다고 할 때: "네, 천천히 생각해보세요. 혹시 추가로 궁금하신 점 있으실까요?"
-
-## 클로징 멘트
-- "감사합니다. 좋은 하루 되세요."
-- "추가 문의사항 있으시면 언제든 연락주세요."
-"""
-
-    return {
-        "template": template,
-        "sections": [
-            {"name": "인사말", "description": "전화 시작 시 사용하는 인사말"},
-            {"name": "상품 소개", "description": "상품/서비스의 핵심 특장점"},
-            {"name": "자주 묻는 질문", "description": "고객이 자주 묻는 질문과 모범 답변"},
-            {"name": "반대 처리", "description": "고객이 거절/반대할 때 응대 방법"},
-            {"name": "클로징 멘트", "description": "통화 종료 시 사용하는 마무리 멘트"}
-        ],
-        "tips": [
-            "따옴표(\"\")로 감싼 문구는 핵심 멘트로 자동 인식됩니다",
-            "각 섹션은 ## 으로 시작합니다",
-            "리스트는 - 또는 숫자로 시작합니다",
-            "Q&A는 ### Q: 와 A: 형식을 사용합니다"
-        ]
-    }

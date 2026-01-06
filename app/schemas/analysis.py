@@ -1,8 +1,28 @@
 """Schemas for call analysis including sentiment and conversation flow"""
 
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional
 from enum import Enum
+
+
+# ============================================
+# 상담 유형별 피드백 타이틀
+# ============================================
+
+class FeedbackType(str, Enum):
+    """피드백 유형 (상담 유형별로 다름)"""
+    # 판매/설득 (sales)
+    LOSS_EMPHASIS = "loss_emphasis"      # 손실 강조
+    ALTERNATIVE = "alternative"          # 대안 제시
+    CLOSING = "closing"                  # 마무리
+
+    # 안내/정보 (information)
+    KEY_POINT = "key_point"              # 핵심 포인트
+    ADDITIONAL_INFO = "additional_info"  # 추가 안내
+
+    # 불만/문제 (complaint)
+    EMPATHY = "empathy"                  # 공감 표현
+    SOLUTION = "solution"                # 해결 방안
 
 
 class SentimentType(str, Enum):
@@ -70,12 +90,6 @@ class CallFlowAnalysis(BaseModel):
     critical_moments: List[str] = Field(default=[], description="중요한 순간/전환점")
 
 
-class ModelUsageInfo(BaseModel):
-    """사용된 모델 정보"""
-    task: str = Field(..., description="작업 유형 (quick_summary, sentiment_analysis 등)")
-    model: str = Field(..., description="사용된 모델명")
-
-
 class ComprehensiveAnalysis(BaseModel):
     """종합 분석 결과"""
     transcript_id: str = Field(..., description="전사 ID")
@@ -100,17 +114,45 @@ class ComprehensiveAnalysis(BaseModel):
     # 메타 정보
     analysis_timestamp: str = Field(..., description="분석 시간")
     confidence_score: float = Field(default=0.0, ge=0.0, le=1.0, description="분석 신뢰도")
-    models_used: Optional[List[ModelUsageInfo]] = Field(
-        default=None,
-        description="작업별 사용된 LLM 모델 (멀티 모델 분석 시)"
+
+
+# ============================================
+# 프론트엔드용 API 스키마
+# ============================================
+
+class AISummaryResponse(BaseModel):
+    """AI 요약 응답 (500px × 3줄, 16px 폰트 = 75~90자)"""
+    transcript_id: str = Field(..., description="전사 ID")
+    summary: str = Field(
+        ...,
+        description="고객 니즈 + 대화 핵심 요약 (최대 90자)",
+        max_length=90
+    )
+    customer_state: CustomerState = Field(..., description="고객 현재 상태")
+
+
+class FeedbackItem(BaseModel):
+    """개별 피드백 항목"""
+    type: FeedbackType = Field(..., description="피드백 유형")
+    title: str = Field(..., description="타이틀 (한글)")
+    content: str = Field(..., description="추천 멘트")
+
+
+class ResponseFeedbackResponse(BaseModel):
+    """응대 피드백 응답 (3가지 추천)"""
+    transcript_id: str = Field(..., description="전사 ID")
+    consultation_type: str = Field(..., description="상담 유형 (sales/information/complaint)")
+    feedbacks: List[FeedbackItem] = Field(
+        ...,
+        description="3가지 피드백",
+        min_length=3,
+        max_length=3
     )
 
 
-class QuickAnalysis(BaseModel):
-    """간단한 분석 결과 (빠른 조회용)"""
-    transcript_id: str
-    summary: str = Field(..., description="한 줄 요약")
-    customer_state: CustomerState
-    overall_sentiment: SentimentType
-    key_needs: List[str]
-    next_action: str
+class ConversationResponse(BaseModel):
+    """전체 대화 내용 응답"""
+    transcript_id: str = Field(..., description="전사 ID")
+    duration: int = Field(..., description="통화 시간 (ms)")
+    speakers: List[str] = Field(..., description="화자 목록")
+    utterances: List[dict] = Field(..., description="시간순 발화 목록")
