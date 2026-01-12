@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional
 import json
 from datetime import datetime
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.core.prompt_manager import get_prompt
@@ -22,20 +22,72 @@ from app.schemas.analysis import (
     ResponseFeedbackResponse
 )
 
+# LLM 응답을 유효한 enum 값으로 매핑
+SENTIMENT_MAPPING = {
+    "긍정": SentimentType.POSITIVE,
+    "중립": SentimentType.NEUTRAL,
+    "부정": SentimentType.NEGATIVE,
+    "흥분/기대": SentimentType.EXCITED,
+    "흥분": SentimentType.EXCITED,
+    "기대": SentimentType.EXCITED,
+    "걱정/우려": SentimentType.WORRIED,
+    "걱정": SentimentType.WORRIED,
+    "우려": SentimentType.WORRIED,
+    "화남": SentimentType.ANGRY,
+    "만족": SentimentType.SATISFIED,
+}
+
+CUSTOMER_STATE_MAPPING = {
+    "관심 있음": CustomerState.INTERESTED,
+    "고민 중": CustomerState.CONSIDERING,
+    "망설임": CustomerState.HESITANT,
+    "만족": CustomerState.SATISFIED,
+    "불만족": CustomerState.DISSATISFIED,
+    "구매 준비됨": CustomerState.READY_TO_BUY,
+    "관심 없음": CustomerState.NOT_INTERESTED,
+}
+
+
+def _normalize_sentiment(value: str) -> SentimentType:
+    """LLM 응답을 유효한 SentimentType으로 변환"""
+    if value in SENTIMENT_MAPPING:
+        return SENTIMENT_MAPPING[value]
+    # 부분 매칭 시도
+    value_lower = value.lower()
+    for key, enum_val in SENTIMENT_MAPPING.items():
+        if key in value or value in key:
+            return enum_val
+    # 기본값
+    return SentimentType.NEUTRAL
+
+
+def _normalize_customer_state(value: str) -> CustomerState:
+    """LLM 응답을 유효한 CustomerState로 변환"""
+    if value in CUSTOMER_STATE_MAPPING:
+        return CUSTOMER_STATE_MAPPING[value]
+    # 부분 매칭 시도
+    for key, enum_val in CUSTOMER_STATE_MAPPING.items():
+        if key in value or value in key:
+            return enum_val
+    # 기본값
+    return CustomerState.CONSIDERING
+
 
 class AnalysisService:
     """MVP Call analysis service using OpenAI"""
 
     def __init__(self):
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value())
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value())
         self.model = "gpt-4o-mini"  # MVP: 비용 효율적인 모델 사용
 
-    def analyze_call(
+    async def analyze_call(
         self,
         transcript_id: str,
         conversation_formatted: str,
         speaker_segments: List[Dict],
         utterances: List[Dict],
+        agent_speaker: Optional[str] = None,
+        other_speakers: Optional[List[str]] = None,
         script_context: Optional[str] = None
     ) -> ComprehensiveAnalysis:
         """
@@ -46,6 +98,8 @@ class AnalysisService:
             conversation_formatted: 포맷된 대화 (A: ... B: ...)
             speaker_segments: 화자별 발화 세그먼트
             utterances: 시간순 발화 목록
+            agent_speaker: 상담사(나) 화자 레이블
+            other_speakers: 상대방 화자 레이블 리스트
             script_context: 스크립트 컨텍스트 (폼/PDF에서 추출)
 
         Returns:
@@ -58,31 +112,34 @@ class AnalysisService:
 
         speakers = list(speaker_texts.keys())
 
-        # 고객/상담사 화자 구분
-        customer_speaker = self._detect_customer_speaker(speaker_segments, utterances)
-        agent_speaker = [s for s in speakers if s != customer_speaker][0] if len(speakers) > 1 else speakers[0]
+        # 상담사/상대방 결정 (이미 API에서 전달받음, fallback만 처리)
+        if not agent_speaker or not other_speakers:
+            customer_speaker = self._detect_customer_speaker(speaker_segments, utterances)
+            agent_speaker = [s for s in speakers if s != customer_speaker][0] if len(speakers) > 1 else speakers[0]
+            other_speakers = [s for s in speakers if s != agent_speaker]
 
-        customer_text = speaker_texts.get(customer_speaker, "")
+        # 상대방 텍스트 (여러 명일 수 있음)
+        other_text = " ".join(speaker_texts.get(s, "") for s in other_speakers)
         agent_text = speaker_texts.get(agent_speaker, "")
 
         # 역할 라벨이 붙은 대화 포맷
         conversation_with_roles = "\n".join([
-            f"{'고객' if u['speaker'] == customer_speaker else '상담사'}: {u['text']}"
+            f"{'상담사(나)' if u['speaker'] == agent_speaker else '상대방'}: {u['text']}"
             for u in utterances
         ])
 
         utterances_text = "\n".join([
-            f"[{'고객' if u['speaker'] == customer_speaker else '상담사'}] {u['text']}"
+            f"[{'상담사(나)' if u['speaker'] == agent_speaker else '상대방'}] {u['text']}"
             for u in utterances
         ])
 
         # 프롬프트 변수 준비
         variables = {
             "conversation": conversation_with_roles,
-            "customer_text": customer_text,
+            "other_text": other_text,
             "agent_text": agent_text,
             "utterances": utterances_text,
-            "customer_speaker": customer_speaker,
+            "other_speakers": ", ".join(other_speakers),
             "agent_speaker": agent_speaker
         }
 
@@ -96,8 +153,8 @@ class AnalysisService:
         # 시스템 프롬프트
         system_prompt = get_prompt("common/system.md")
 
-        # OpenAI API 호출
-        response = self.client.chat.completions.create(
+        # OpenAI API 호출 (비동기)
+        response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -121,10 +178,12 @@ class AnalysisService:
         except json.JSONDecodeError as e:
             raise ValueError(f"LLM 응답 파싱 실패: {e}\nContent: {content}")
 
-        # Pydantic 모델로 변환
-        speaker_sentiments = [
-            SpeakerSentiment(**s) for s in analysis_dict["speaker_sentiments"]
-        ]
+        # Pydantic 모델로 변환 (LLM 응답 정규화 포함)
+        speaker_sentiments = []
+        for s in analysis_dict["speaker_sentiments"]:
+            s_copy = s.copy()
+            s_copy["overall_sentiment"] = _normalize_sentiment(s.get("overall_sentiment", "중립"))
+            speaker_sentiments.append(SpeakerSentiment(**s_copy))
 
         conversation_summary = ConversationSummary(
             **analysis_dict["conversation_summary"]
@@ -142,11 +201,16 @@ class AnalysisService:
             critical_moments=analysis_dict["call_flow"].get("critical_moments", [])
         )
 
+        # customer_state 정규화
+        customer_state = _normalize_customer_state(
+            analysis_dict.get("customer_state", "고민 중")
+        )
+
         # 최종 분석 결과
         analysis = ComprehensiveAnalysis(
             transcript_id=transcript_id,
             speaker_sentiments=speaker_sentiments,
-            customer_state=CustomerState(analysis_dict["customer_state"]),
+            customer_state=customer_state,
             conversation_summary=conversation_summary,
             customer_need=customer_need,
             call_flow=call_flow,
@@ -226,7 +290,7 @@ class AnalysisService:
         customer_speaker = max(scores.items(), key=lambda x: x[1])[0]
         return customer_speaker
 
-    def generate_summary(
+    async def generate_summary(
         self,
         transcript_id: str,
         conversation_formatted: str,
@@ -252,8 +316,8 @@ class AnalysisService:
         prompt = get_prompt("call_analysis/summary.md", variables)
         system_prompt = get_prompt("common/system.md")
 
-        # OpenAI API 호출
-        response = self.client.chat.completions.create(
+        # OpenAI API 호출 (비동기)
+        response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -283,7 +347,7 @@ class AnalysisService:
             customer_state=CustomerState(result.get("customer_state", "관심 있음"))
         )
 
-    def generate_feedback(
+    async def generate_feedback(
         self,
         transcript_id: str,
         conversation_formatted: str,
@@ -320,8 +384,8 @@ class AnalysisService:
 
         system_prompt = get_prompt("common/system.md")
 
-        # OpenAI API 호출
-        response = self.client.chat.completions.create(
+        # OpenAI API 호출 (비동기)
+        response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},

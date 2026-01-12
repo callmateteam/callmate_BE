@@ -44,7 +44,8 @@ ws://host/api/v1/transcripts/ws/transcribe
     "action": "upload",
     "filename": "call.mp3",
     "data": "<base64 인코딩된 파일>",
-    "language_code": "ko"
+    "language_code": "ko",
+    "keywords": ["인터케어:5", "스카우터:3"]  // 선택: 회사명/제품명 인식률 향상
 }
 ```
 
@@ -238,6 +239,7 @@ async def websocket_transcribe(websocket: WebSocket):
         filename = data.get("filename", "audio.mp3")
         file_data_b64 = data.get("data")
         language_code = data.get("language_code", "ko")
+        keywords = data.get("keywords", [])  # 회사명, 제품명 등 (프론트에서 전달)
 
         if not file_data_b64:
             await handler.send_error("MISSING_DATA", "파일 데이터가 없습니다.")
@@ -314,7 +316,8 @@ async def websocket_transcribe(websocket: WebSocket):
                 language_code=language_code,
                 progress_callback=lambda p, m: asyncio.create_task(
                     handler.send_progress(p, m)
-                )
+                ),
+                keywords=keywords  # 회사명, 제품명 등 인식률 향상
             )
 
             await handler.send_progress(100, "완료!")

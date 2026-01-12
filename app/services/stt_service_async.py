@@ -7,10 +7,16 @@ Deepgram is much faster than AssemblyAI:
 - Near real-time processing
 """
 
-from typing import Dict, Callable, Optional
+from typing import Dict, Callable, Optional, List
 import asyncio
 from deepgram import DeepgramClient, PrerecordedOptions, FileSource
 from app.core.config import settings
+
+
+# 기본 키워드 (일반적인 상담 용어)
+# 형식: "단어:가중치" (가중치 -10 ~ 10, 높을수록 인식 우선)
+# 회사별 키워드는 WebSocket 요청 시 전달받음
+DEFAULT_KEYWORDS = []
 
 
 class AsyncSTTService:
@@ -30,7 +36,8 @@ class AsyncSTTService:
         self,
         audio_file_path: str,
         language_code: str = "ko",
-        progress_callback: Optional[Callable[[int, str], None]] = None
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        keywords: Optional[List[str]] = None
     ) -> Dict:
         """
         Transcribe audio with progress updates.
@@ -39,10 +46,15 @@ class AsyncSTTService:
             audio_file_path: Path to audio file
             language_code: Language code (default: "ko")
             progress_callback: Callback function(percent, message)
+            keywords: Custom keywords for better recognition (e.g., ["회사명:5"])
 
         Returns:
             Transcription result dictionary
         """
+        # 키워드 병합 (기본 + 사용자 지정)
+        all_keywords = DEFAULT_KEYWORDS.copy()
+        if keywords:
+            all_keywords.extend(keywords)
         # Step 1: Read file (10%)
         if progress_callback:
             await self._call_callback(progress_callback, 10, "파일 읽는 중...")
@@ -65,6 +77,7 @@ class AsyncSTTService:
             diarize=True,
             punctuate=True,
             utterances=True,
+            keywords=all_keywords,  # 키워드 인식률 향상
         )
 
         # Step 3: Transcribe (30-80%)

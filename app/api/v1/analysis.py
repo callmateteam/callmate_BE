@@ -40,6 +40,7 @@ class AnalysisRequest(BaseModel):
     """분석 요청 (프론트에서 저장한 전사 데이터 전달)"""
     utterances: List[Utterance]
     speakers: List[str]
+    my_speaker: Optional[str] = None  # 사용자가 선택한 "나" (상담사)
     script_context: Optional[str] = None
     consultation_type: str = "sales"
 
@@ -64,21 +65,40 @@ def _prepare_analysis_data(request: AnalysisRequest):
             "utterances": speaker_utterances
         })
 
-    # 고객 텍스트 추출
-    customer_speaker = analysis_service._detect_customer_speaker(
-        speaker_segments, utterances_dict
-    )
-    customer_text = ""
+    # 상담사(나) / 상대방 결정
+    if request.my_speaker and request.my_speaker in request.speakers:
+        # 프론트에서 지정한 경우
+        agent_speaker = request.my_speaker
+        other_speakers = [s for s in request.speakers if s != agent_speaker]
+    else:
+        # 휴리스틱 fallback (my_speaker 없을 때)
+        customer_speaker = analysis_service._detect_customer_speaker(
+            speaker_segments, utterances_dict
+        )
+        agent_speaker = [s for s in request.speakers if s != customer_speaker][0] if len(request.speakers) > 1 else request.speakers[0]
+        other_speakers = [s for s in request.speakers if s != agent_speaker]
+
+    # 상대방(들) 텍스트 추출
+    other_text = ""
     for seg in speaker_segments:
-        if seg["speaker"] == customer_speaker:
-            customer_text = seg["full_text"]
+        if seg["speaker"] in other_speakers:
+            other_text += seg["full_text"] + " "
+
+    # 상담사 텍스트 추출
+    agent_text = ""
+    for seg in speaker_segments:
+        if seg["speaker"] == agent_speaker:
+            agent_text = seg["full_text"]
             break
 
     return {
         "utterances": utterances_dict,
         "speaker_segments": speaker_segments,
         "conversation_formatted": conversation_formatted,
-        "customer_text": customer_text
+        "agent_speaker": agent_speaker,
+        "other_speakers": other_speakers,
+        "agent_text": agent_text,
+        "other_text": other_text.strip()
     }
 
 
@@ -107,10 +127,10 @@ async def get_summary(request: AnalysisRequest):
     data = _prepare_analysis_data(request)
 
     try:
-        summary = analysis_service.generate_summary(
+        summary = await analysis_service.generate_summary(
             transcript_id="from_request",
             conversation_formatted=data["conversation_formatted"],
-            customer_text=data["customer_text"]
+            customer_text=data["other_text"]  # 상대방 텍스트
         )
     except Exception as e:
         raise SummaryError(str(e)).to_http_exception()
@@ -151,10 +171,10 @@ async def get_feedback(request: AnalysisRequest):
     data = _prepare_analysis_data(request)
 
     try:
-        feedback = analysis_service.generate_feedback(
+        feedback = await analysis_service.generate_feedback(
             transcript_id="from_request",
             conversation_formatted=data["conversation_formatted"],
-            customer_text=data["customer_text"],
+            customer_text=data["other_text"],  # 상대방 텍스트
             consultation_type=request.consultation_type,
             script_context=request.script_context
         )
@@ -181,6 +201,7 @@ async def analyze_call(request: AnalysisRequest):
     ## 요청 Body
     - `utterances`: 전사 결과의 utterances 배열
     - `speakers`: 화자 목록
+    - `my_speaker`: (선택) 사용자가 선택한 "나" (상담사) - 미지정 시 자동 감지
     - `script_context`: (선택) 스크립트 컨텍스트 - 맞춤 추천 멘트 생성에 사용
 
     ## 분석 결과
@@ -194,11 +215,13 @@ async def analyze_call(request: AnalysisRequest):
     data = _prepare_analysis_data(request)
 
     try:
-        analysis = analysis_service.analyze_call(
+        analysis = await analysis_service.analyze_call(
             transcript_id="from_request",
             conversation_formatted=data["conversation_formatted"],
             speaker_segments=data["speaker_segments"],
             utterances=data["utterances"],
+            agent_speaker=data["agent_speaker"],
+            other_speakers=data["other_speakers"],
             script_context=request.script_context
         )
     except Exception as e:
