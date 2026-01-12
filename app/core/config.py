@@ -1,10 +1,10 @@
 from pydantic_settings import BaseSettings
 from pydantic import SecretStr
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
-    """Application settings"""
+    """Application settings (MVP)"""
 
     # Application
     APP_NAME: str = "CallMate API"
@@ -16,30 +16,13 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
-    # Database
-    DATABASE_URL: str
-
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
-
-    # OpenAI
+    # OpenAI (필수 - 통화 분석)
     OPENAI_API_KEY: SecretStr
 
-    # AssemblyAI
-    ASSEMBLYAI_API_KEY: SecretStr
+    # Deepgram (필수 - 음성→텍스트, 빠른 처리)
+    DEEPGRAM_API_KEY: SecretStr
 
-    # Anthropic
-    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
-
-    # Google (Gemini)
-    GOOGLE_API_KEY: SecretStr = SecretStr("")
-
-    # Security
-    SECRET_KEY: SecretStr
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-
-    # CORS
+    # CORS (Vercel 프론트엔드)
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     # File Upload

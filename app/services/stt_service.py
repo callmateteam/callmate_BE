@@ -1,15 +1,15 @@
-"""Speech-to-Text service using AssemblyAI with speaker diarization"""
+"""Speech-to-Text service using Deepgram with speaker diarization"""
 
-from typing import List, Dict, Optional
-import assemblyai as aai
+from typing import List, Dict
+from deepgram import DeepgramClient, PrerecordedOptions, FileSource
 from app.core.config import settings
 
 
 class STTService:
-    """Service for Speech-to-Text with speaker diarization using AssemblyAI"""
+    """Service for Speech-to-Text with speaker diarization using Deepgram"""
 
     def __init__(self):
-        aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
+        self.client = DeepgramClient(settings.DEEPGRAM_API_KEY.get_secret_value())
 
     def transcribe_with_speakers(
         self,
@@ -49,71 +49,83 @@ class STTService:
             >>> for utterance in result["utterances"]:
             ...     print(f"{utterance['speaker']}: {utterance['text']}")
         """
-        # Configure transcription
-        config = aai.TranscriptionConfig(
-            speaker_labels=speaker_labels,
-            language_code=language_code
+        # Read audio file
+        with open(audio_file_path, "rb") as f:
+            buffer_data = f.read()
+
+        payload: FileSource = {
+            "buffer": buffer_data,
+        }
+
+        # Configure options
+        options = PrerecordedOptions(
+            model="nova-2",
+            language=language_code,
+            smart_format=True,
+            diarize=speaker_labels,
+            punctuate=True,
+            utterances=True,
         )
 
-        # Create transcriber
-        transcriber = aai.Transcriber()
-
         # Transcribe
-        transcript = transcriber.transcribe(audio_file_path, config=config)
+        response = self.client.listen.rest.v("1").transcribe_file(payload, options)
 
-        # Wait for completion
-        if transcript.status == aai.TranscriptStatus.error:
-            raise Exception(f"Transcription failed: {transcript.error}")
+        # Process result
+        return self._process_result(response)
 
-        # Process utterances
+    def _process_result(self, response) -> Dict:
+        """Process Deepgram response into our format"""
+        result = response.to_dict()
+
         utterances = []
         speakers_set = set()
 
-        if transcript.utterances:
-            for utterance in transcript.utterances:
-                # Convert speaker label (e.g., "SPEAKER_00" -> "A")
-                speaker = self._convert_speaker_label(utterance.speaker)
+        # Get utterances from Deepgram response
+        if result.get("results", {}).get("utterances"):
+            for utterance in result["results"]["utterances"]:
+                speaker = self._convert_speaker_label(utterance.get("speaker", 0))
                 speakers_set.add(speaker)
+
+                # Deepgram returns seconds, convert to milliseconds
+                start_ms = int(utterance["start"] * 1000)
+                end_ms = int(utterance["end"] * 1000)
 
                 utterances.append({
                     "speaker": speaker,
-                    "text": utterance.text,
-                    "start": utterance.start,
-                    "end": utterance.end,
-                    "confidence": utterance.confidence if hasattr(utterance, 'confidence') else 0.0
+                    "text": utterance["transcript"],
+                    "start": start_ms,
+                    "end": end_ms,
+                    "confidence": utterance.get("confidence", 0.0)
                 })
 
         # Sort speakers alphabetically
         speakers = sorted(list(speakers_set))
 
+        # Get full text
+        full_text = ""
+        if result.get("results", {}).get("channels"):
+            channels = result["results"]["channels"]
+            if channels and channels[0].get("alternatives"):
+                full_text = channels[0]["alternatives"][0].get("transcript", "")
+
         return {
-            "transcript_id": transcript.id,
-            "full_text": transcript.text,
+            "full_text": full_text,
             "utterances": utterances,
             "speakers": speakers,
             "duration": utterances[-1]["end"] if utterances else 0
         }
 
-    def _convert_speaker_label(self, speaker_label: str) -> str:
+    def _convert_speaker_label(self, speaker_num: int) -> str:
         """
-        Convert AssemblyAI speaker label to simple letter
+        Convert Deepgram speaker number to simple letter
 
         Args:
-            speaker_label: Original label (e.g., "SPEAKER_00", "SPEAKER_01")
+            speaker_num: Speaker number (0, 1, 2, ...)
 
         Returns:
             Simple letter (e.g., "A", "B", "C")
         """
-        # Extract number from "SPEAKER_00"
-        if speaker_label.startswith("SPEAKER_"):
-            try:
-                speaker_num = int(speaker_label.split("_")[1])
-                # Convert to letter: 0->A, 1->B, 2->C, etc.
-                return chr(65 + speaker_num)  # 65 is ASCII for 'A'
-            except (IndexError, ValueError):
-                return speaker_label
-
-        return speaker_label
+        return chr(65 + speaker_num)  # 65 is ASCII for 'A'
 
     def get_speaker_segments(
         self,

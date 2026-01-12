@@ -34,7 +34,7 @@ flowchart TB
     end
 
     subgraph External["외부 API"]
-        ASSEMBLYAI["AssemblyAI"]
+        ASSEMBLYAI["Deepgram"]
         OPENAI_API["OpenAI API"]
         ANTHROPIC_API["Anthropic API"]
         GOOGLE_API["Google AI API"]
@@ -58,7 +58,7 @@ flowchart TB
 ```mermaid
 flowchart TD
     START([음성 파일 업로드]) --> UPLOAD["POST /transcripts/upload"]
-    UPLOAD --> STT["AssemblyAI 화자분리+STT"]
+    UPLOAD --> STT["Deepgram 화자분리+STT"]
     STT --> TRANS_ID["transcript_id 반환"]
 
     TRANS_ID --> ANALYSIS["GET /analysis/comprehensive"]

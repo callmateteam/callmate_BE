@@ -3,7 +3,7 @@ Script extraction API endpoints for MVP.
 Supports form input (4-step wizard) and PDF file inputs.
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form
 from typing import Optional
 import tempfile
 import os
@@ -20,6 +20,12 @@ from app.schemas.script import (
     ProblemSolution
 )
 from app.services.script_extractor_service import script_extractor_service
+from app.core.exceptions import (
+    InvalidFileTypeError,
+    FileSizeExceededError,
+    PDFParsingError,
+    ScriptExtractionError
+)
 
 router = APIRouter(prefix="/scripts", tags=["scripts"])
 
@@ -125,20 +131,18 @@ async def extract_from_pdf(
     - `prompt_context`: AI 분석 시 사용할 컨텍스트 문자열
     - `metadata.page_count`: PDF 페이지 수
     """
-    # 파일 유효성 검사
+    # 파일 확장자 검사
     if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(
-            status_code=400,
-            detail="PDF 파일만 지원합니다."
-        )
+        raise InvalidFileTypeError("pdf").to_http_exception()
+
+    # MIME 타입 검증 (추가 보안)
+    if file.content_type != "application/pdf":
+        raise InvalidFileTypeError("pdf").to_http_exception()
 
     # 파일 크기 검사 (10MB)
     contents = await file.read()
     if len(contents) > 10 * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail="파일 크기는 10MB를 초과할 수 없습니다."
-        )
+        raise FileSizeExceededError(max_size_mb=10).to_http_exception()
 
     try:
         # 임시 파일로 저장
@@ -197,7 +201,4 @@ async def extract_from_pdf(
                 os.unlink(tmp_path)
 
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"PDF 파싱 실패: {str(e)}"
-        )
+        raise PDFParsingError(str(e)).to_http_exception()

@@ -25,48 +25,66 @@ description = """
 - **고객 니즈 추출** (전화 사유, 요구사항, 고민거리)
 - **추천 멘트 생성** (다음 대응에 사용할 멘트 제안)
 
-#### 💬 통화 요약 (Calls)
-- 통화 내용 자동 요약
-- 핵심 포인트 추출
-- 다음 액션 제안
-
 ### 워크플로우
 
-**무료 사용자:**
 ```
-1. 음성 파일 업로드
-   POST /api/v1/transcripts/upload-and-transcribe
+1. 음성 파일 업로드 (WebSocket)
+   WS   /api/v1/transcripts/ws/transcribe (실시간 진행률)
 
 2. 화자별 대화 조회
    GET /api/v1/transcripts/{id}/speakers
 
-3. 종합 분석 조회 (일반 프롬프트)
+3. 종합 분석 조회
    GET /api/v1/analysis/{id}/comprehensive
 ```
 
-**SaaS 고객 (회사별 맞춤 분석):**
+---
+
+### 🔌 WebSocket API (실시간 전사)
+
+긴 음성 파일 처리 시 실시간 진행률을 받으려면 WebSocket을 사용하세요.
+
+**엔드포인트:** `ws://host/api/v1/transcripts/ws/transcribe`
+
+**사용 방법:**
+```javascript
+const ws = new WebSocket('ws://localhost:8000/api/v1/transcripts/ws/transcribe');
+
+ws.onopen = () => {
+    const fileData = btoa(audioFileContent); // base64 인코딩
+    ws.send(JSON.stringify({
+        action: 'upload',
+        filename: 'call.mp3',
+        data: fileData,
+        language_code: 'ko'
+    }));
+};
+
+ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.status === 'processing') {
+        console.log(`진행률: ${msg.progress.percent}%`);
+    } else if (msg.status === 'completed') {
+        console.log('완료:', msg.data);
+    }
+};
 ```
-1. 회사 등록
-   POST /api/v1/companies
 
-2. 영업 스크립트 PDF 업로드
-   POST /api/v1/companies/{company_id}/scripts
+**메시지 흐름:**
+1. `{"status": "received", "data": {"file_id": "...", "duration_ms": 180000}}`
+2. `{"status": "processing", "progress": {"percent": 10, "message": "업로드 중..."}}`
+3. `{"status": "processing", "progress": {"percent": 50, "message": "전사 중..."}}`
+4. `{"status": "completed", "data": {...전사 결과...}}`
 
-3. 음성 파일 업로드
-   POST /api/v1/transcripts/upload-and-transcribe
-
-4. 종합 분석 조회 (회사 맞춤 프롬프트)
-   GET /api/v1/analysis/{id}/comprehensive?company_id={company_id}
-```
+---
 
 ### 기술 스택
-- **STT & Speaker Diarization**: AssemblyAI
+- **STT & Speaker Diarization**: Deepgram Nova-2 (빠른 처리)
 - **LLM 분석**: OpenAI GPT-4
-- **프롬프트 관리**: Markdown 기반 템플릿
+- **실시간 통신**: WebSocket
 
 ### 문서
 - Swagger UI: `/api/docs`
-- ReDoc: `/api/redoc`
 """
 
 tags_metadata = [
@@ -75,16 +93,16 @@ tags_metadata = [
         "description": "**통화 전사 API** - 음성 파일을 업로드하고 화자별로 분리된 전사 결과를 조회합니다.",
     },
     {
+        "name": "transcripts-ws",
+        "description": "**실시간 전사 API (WebSocket)** - WebSocket을 통해 실시간 진행률과 함께 전사를 수행합니다.",
+    },
+    {
         "name": "analysis",
         "description": "**통화 분석 API** - 전사된 통화를 종합 분석하여 감정, 고객 상태, 니즈, 추천 멘트를 제공합니다.",
     },
     {
-        "name": "calls",
-        "description": "**통화 관리 API** - 통화 업로드, 분석 요청, 결과 조회 등 통화 관련 기본 기능을 제공합니다.",
-    },
-    {
-        "name": "Companies (SaaS)",
-        "description": "**회사 관리 API (SaaS)** - 회사 등록, 영업 스크립트 PDF 업로드, 회사별 맞춤 분석을 제공합니다.",
+        "name": "scripts",
+        "description": "**스크립트 API** - 영업 스크립트 폼 입력 및 PDF 업로드를 통해 AI 분석용 컨텍스트를 생성합니다.",
     },
 ]
 
@@ -94,7 +112,7 @@ app = FastAPI(
     version=settings.APP_VERSION,
     debug=settings.DEBUG,
     docs_url="/api/docs",
-    redoc_url="/api/redoc",
+    redoc_url=None,
     openapi_url="/api/openapi.json",
     openapi_tags=tags_metadata,
     contact={

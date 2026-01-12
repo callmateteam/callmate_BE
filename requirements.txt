@@ -21,15 +21,15 @@ tiktoken==0.5.2  # Token counting for prompts
 
 # Audio Processing & STT
 python-multipart==0.0.6
-assemblyai==0.17.0  # Speaker diarization & STT
+deepgram-sdk==3.4.0  # Fast STT with speaker diarization
+mutagen==1.47.0  # Audio duration detection
 
 # Security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-dotenv==1.0.0
 
-# CORS
-python-cors==1.0.0
+# CORS - FastAPI has built-in CORS middleware (starlette.middleware.cors)
 
 # Utilities
 httpx==0.26.0

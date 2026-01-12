@@ -1,41 +1,62 @@
 """API endpoints for call analysis (MVP)"""
 
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
+from typing import Optional, List
+from fastapi import APIRouter, Query, Body
+from pydantic import BaseModel
 from app.schemas.analysis import (
     ComprehensiveAnalysis,
     AISummaryResponse,
-    ResponseFeedbackResponse,
-    ConversationResponse
+    ResponseFeedbackResponse
 )
 from app.services.analysis_service import analysis_service
-from app.api.v1.transcripts import transcripts_store
+from app.core.exceptions import (
+    AnalysisError,
+    SummaryError,
+    FeedbackError,
+    InvalidConsultationTypeError
+)
 
 router = APIRouter()
 
-# In-memory storage for analysis results
-analysis_store = {}
-summary_store = {}
-feedback_store = {}
+# In-memory cache
+summary_cache = {}
+feedback_cache = {}
+analysis_cache = {}
 
 
-def _get_transcript_data(transcript_id: str):
-    """전사 데이터 조회 및 전처리"""
-    if transcript_id not in transcripts_store:
-        raise HTTPException(status_code=404, detail="전사 결과를 찾을 수 없습니다")
+# ============================================
+# Request Models (프론트에서 전사 데이터 전달)
+# ============================================
 
-    stored = transcripts_store[transcript_id]
-    result = stored["result"]
+class Utterance(BaseModel):
+    speaker: str
+    text: str
+    start: int
+    end: int
+    confidence: float = 0.0
 
-    from app.services.stt_service import stt_service
 
-    # 화자별 데이터 준비
+class AnalysisRequest(BaseModel):
+    """분석 요청 (프론트에서 저장한 전사 데이터 전달)"""
+    utterances: List[Utterance]
+    speakers: List[str]
+    script_context: Optional[str] = None
+    consultation_type: str = "sales"
+
+
+def _prepare_analysis_data(request: AnalysisRequest):
+    """분석을 위한 데이터 전처리"""
+    utterances_dict = [u.model_dump() for u in request.utterances]
+
+    # 대화 포맷 생성
+    conversation_formatted = "\n".join(
+        f"{u['speaker']}: {u['text']}" for u in utterances_dict
+    )
+
+    # 화자별 세그먼트
     speaker_segments = []
-    for speaker in result["speakers"]:
-        speaker_utterances = stt_service.get_speaker_segments(
-            result["utterances"],
-            speaker
-        )
+    for speaker in request.speakers:
+        speaker_utterances = [u for u in utterances_dict if u["speaker"] == speaker]
         full_text = " ".join(u["text"] for u in speaker_utterances)
         speaker_segments.append({
             "speaker": speaker,
@@ -43,15 +64,9 @@ def _get_transcript_data(transcript_id: str):
             "utterances": speaker_utterances
         })
 
-    # 대화 포맷
-    conversation_formatted = stt_service.format_conversation(
-        result["utterances"],
-        format_type="simple"
-    )
-
     # 고객 텍스트 추출
     customer_speaker = analysis_service._detect_customer_speaker(
-        speaker_segments, result["utterances"]
+        speaker_segments, utterances_dict
     )
     customer_text = ""
     for seg in speaker_segments:
@@ -60,7 +75,7 @@ def _get_transcript_data(transcript_id: str):
             break
 
     return {
-        "result": result,
+        "utterances": utterances_dict,
         "speaker_segments": speaker_segments,
         "conversation_formatted": conversation_formatted,
         "customer_text": customer_text
@@ -71,170 +86,102 @@ def _get_transcript_data(transcript_id: str):
 # 1. AI 요약 API
 # ============================================
 
-@router.get(
-    "/{transcript_id}/summary",
+@router.post(
+    "/summary",
     response_model=AISummaryResponse,
     summary="AI 요약",
     description="고객 니즈와 대화 핵심을 90자 이내로 요약합니다."
 )
-async def get_summary(transcript_id: str):
+async def get_summary(request: AnalysisRequest):
     """
     AI 요약 (500px × 3줄, 16px 폰트 = 최대 90자)
 
-    - **transcript_id**: 전사 ID
+    ## 요청 Body
+    - `utterances`: 전사 결과의 utterances 배열
+    - `speakers`: 화자 목록 ["A", "B"]
 
     ## 반환값
     - `summary`: 90자 이내 요약
     - `customer_state`: 고객 현재 상태
     """
-    # 캐시 확인
-    if transcript_id in summary_store:
-        return summary_store[transcript_id]
+    data = _prepare_analysis_data(request)
 
-    # 데이터 조회
-    data = _get_transcript_data(transcript_id)
-
-    # 요약 생성
     try:
         summary = analysis_service.generate_summary(
-            transcript_id=transcript_id,
+            transcript_id="from_request",
             conversation_formatted=data["conversation_formatted"],
             customer_text=data["customer_text"]
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"요약 생성 실패: {str(e)}")
-
-    # 캐시 저장
-    summary_store[transcript_id] = summary
+        raise SummaryError(str(e)).to_http_exception()
 
     return summary
 
 
 # ============================================
-# 2. 전체 대화 내용 API
+# 2. 응대 피드백 API
 # ============================================
 
-@router.get(
-    "/{transcript_id}/conversation",
-    response_model=ConversationResponse,
-    summary="전체 대화 내용",
-    description="화자 분리된 전체 대화 내용을 반환합니다."
-)
-async def get_conversation(transcript_id: str):
-    """
-    전체 대화 내용 조회
-
-    - **transcript_id**: 전사 ID
-
-    ## 반환값
-    - `duration`: 통화 시간 (ms)
-    - `speakers`: 화자 목록
-    - `utterances`: 시간순 발화 목록 [{speaker, text, start, end, confidence}]
-    """
-    if transcript_id not in transcripts_store:
-        raise HTTPException(status_code=404, detail="전사 결과를 찾을 수 없습니다")
-
-    stored = transcripts_store[transcript_id]
-    result = stored["result"]
-
-    return ConversationResponse(
-        transcript_id=transcript_id,
-        duration=result.get("duration", 0),
-        speakers=result.get("speakers", []),
-        utterances=result.get("utterances", [])
-    )
-
-
-# ============================================
-# 3. 응대 피드백 API
-# ============================================
-
-@router.get(
-    "/{transcript_id}/feedback",
+@router.post(
+    "/feedback",
     response_model=ResponseFeedbackResponse,
     summary="응대 피드백",
     description="상담 유형별 3가지 추천 멘트를 제공합니다."
 )
-async def get_feedback(
-    transcript_id: str,
-    consultation_type: str = Query(
-        "sales",
-        description="상담 유형 (sales/information/complaint)"
-    ),
-    script_context: Optional[str] = Query(
-        None,
-        description="스크립트 컨텍스트 (POST /scripts/extract/form 응답의 prompt_context)"
-    )
-):
+async def get_feedback(request: AnalysisRequest):
     """
     응대 피드백 (상담 유형별 3가지 추천)
 
-    - **transcript_id**: 전사 ID
-    - **consultation_type**: 상담 유형
+    ## 요청 Body
+    - `utterances`: 전사 결과의 utterances 배열
+    - `speakers`: 화자 목록
+    - `consultation_type`: 상담 유형
       - `sales`: 판매/유지/설득 → 손실 강조, 대안 제시, 마무리
       - `information`: 안내/정보 제공 → 핵심 포인트, 추가 안내, 마무리
       - `complaint`: 불만/문제 해결 → 공감 표현, 해결 방안, 마무리
-    - **script_context**: (선택) 회사 스크립트
+    - `script_context`: (선택) 회사 스크립트
 
     ## 반환값
     - `feedbacks`: 3가지 피드백 [{type, title, content}]
     """
-    # 유효한 상담 유형 확인
     valid_types = ["sales", "information", "complaint"]
-    if consultation_type not in valid_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"유효하지 않은 상담 유형입니다. ({', '.join(valid_types)})"
-        )
+    if request.consultation_type not in valid_types:
+        raise InvalidConsultationTypeError().to_http_exception()
 
-    # 캐시 키
-    cache_key = f"{transcript_id}:{consultation_type}:{hash(script_context or '')}"
-    if cache_key in feedback_store:
-        return feedback_store[cache_key]
+    data = _prepare_analysis_data(request)
 
-    # 데이터 조회
-    data = _get_transcript_data(transcript_id)
-
-    # 피드백 생성
     try:
         feedback = analysis_service.generate_feedback(
-            transcript_id=transcript_id,
+            transcript_id="from_request",
             conversation_formatted=data["conversation_formatted"],
             customer_text=data["customer_text"],
-            consultation_type=consultation_type,
-            script_context=script_context
+            consultation_type=request.consultation_type,
+            script_context=request.script_context
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"피드백 생성 실패: {str(e)}")
-
-    # 캐시 저장
-    feedback_store[cache_key] = feedback
+        raise FeedbackError(str(e)).to_http_exception()
 
     return feedback
 
 
 # ============================================
-# 4. 종합 분석 API (기존)
+# 3. 종합 분석 API
 # ============================================
 
-@router.get(
-    "/{transcript_id}",
+@router.post(
+    "/comprehensive",
     response_model=ComprehensiveAnalysis,
     summary="통화 종합 분석",
     description="음성 통화를 AI로 종합 분석합니다."
 )
-async def analyze_call(
-    transcript_id: str,
-    script_context: Optional[str] = Query(
-        None,
-        description="스크립트 컨텍스트 (POST /scripts/extract/form 응답의 prompt_context)"
-    )
-):
+async def analyze_call(request: AnalysisRequest):
     """
     통화 종합 분석
 
-    - **transcript_id**: 전사 ID (POST /transcripts/upload 응답)
-    - **script_context**: (선택) 스크립트 컨텍스트 - 맞춤 추천 멘트 생성에 사용
+    ## 요청 Body
+    - `utterances`: 전사 결과의 utterances 배열
+    - `speakers`: 화자 목록
+    - `script_context`: (선택) 스크립트 컨텍스트 - 맞춤 추천 멘트 생성에 사용
 
     ## 분석 결과
     - 화자별 감정 분석
@@ -244,49 +191,17 @@ async def analyze_call(
     - 대화 흐름 (턴별 분석, 전환점)
     - 추천 액션 및 멘트
     """
-    # 캐시 확인
-    cache_key = f"{transcript_id}:{hash(script_context or '')}"
-    if cache_key in analysis_store:
-        return analysis_store[cache_key]
+    data = _prepare_analysis_data(request)
 
-    # 데이터 조회
-    data = _get_transcript_data(transcript_id)
-
-    # 분석 수행
     try:
         analysis = analysis_service.analyze_call(
-            transcript_id=transcript_id,
+            transcript_id="from_request",
             conversation_formatted=data["conversation_formatted"],
             speaker_segments=data["speaker_segments"],
-            utterances=data["result"]["utterances"],
-            script_context=script_context
+            utterances=data["utterances"],
+            script_context=request.script_context
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"분석 실패: {str(e)}"
-        )
-
-    # 캐시 저장
-    analysis_store[cache_key] = analysis
+        raise AnalysisError(str(e)).to_http_exception()
 
     return analysis
-
-
-@router.post(
-    "/{transcript_id}/reanalyze",
-    response_model=ComprehensiveAnalysis,
-    summary="재분석",
-    description="캐시를 무시하고 새로 분석합니다."
-)
-async def reanalyze_call(
-    transcript_id: str,
-    script_context: Optional[str] = Query(None, description="스크립트 컨텍스트")
-):
-    """재분석 (캐시 무시)"""
-    # 캐시 삭제
-    cache_key = f"{transcript_id}:{hash(script_context or '')}"
-    if cache_key in analysis_store:
-        del analysis_store[cache_key]
-
-    return await analyze_call(transcript_id, script_context)
