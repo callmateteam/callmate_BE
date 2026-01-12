@@ -1,0 +1,46 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/callmate_BE
+
+            # Pull latest code
+            git pull origin main
+
+            # Rebuild and restart container
+            sudo docker build -t callmate_api .
+            sudo docker stop callmate_api || true
+            sudo docker rm callmate_api || true
+            sudo docker run -d \
+              --name callmate_api \
+              -p 8000:8000 \
+              --env-file .env \
+              -v $(pwd)/uploads:/app/uploads \
+              --restart unless-stopped \
+              callmate_api
+
+            # Clean up old images
+            sudo docker image prune -f
+
+            # Health check
+            sleep 5
+            curl -f http://localhost:8000/health || exit 1
