@@ -25,9 +25,24 @@ class Settings(BaseSettings):
     # CORS (Vercel 프론트엔드)
     ALLOWED_ORIGINS: str = "http://localhost:3000,https://callmate-fe.vercel.app"
 
+    # AWS S3
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_REGION: str = "ap-northeast-2"
+    S3_BUCKET_NAME: Optional[str] = None
+
     # File Upload
     MAX_UPLOAD_SIZE: int = 52428800  # 50MB
-    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_DIR: str = "./uploads"  # S3 미설정 시 로컬 저장
+
+    @property
+    def use_s3(self) -> bool:
+        """S3 사용 여부 (AWS 설정이 모두 있으면 True)"""
+        return all([
+            self.AWS_ACCESS_KEY_ID,
+            self.AWS_SECRET_ACCESS_KEY,
+            self.S3_BUCKET_NAME
+        ])
 
     class Config:
         env_file = ".env"
