@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     DEEPGRAM_API_KEY: SecretStr
 
     # CORS (Vercel 프론트엔드)
-    ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,https://callmate-fe.vercel.app"
 
     # File Upload
     MAX_UPLOAD_SIZE: int = 52428800  # 50MB
