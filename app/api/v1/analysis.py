@@ -1,7 +1,10 @@
 """API endpoints for call analysis (MVP)"""
 
 from typing import Optional, List
-from fastapi import APIRouter, Query, Body
+import os
+import uuid
+from pathlib import Path
+from fastapi import APIRouter, Query, Body, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from app.schemas.analysis import (
     ComprehensiveAnalysis,
@@ -9,6 +12,9 @@ from app.schemas.analysis import (
     ResponseFeedbackResponse
 )
 from app.services.analysis_service import analysis_service
+from app.services.stt_service_async import AsyncSTTService
+from app.core.config import settings
+from app.utils.audio import get_audio_duration_ms
 from app.core.exceptions import (
     AnalysisError,
     SummaryError,
@@ -228,3 +234,167 @@ async def analyze_call(request: AnalysisRequest):
         raise AnalysisError(str(e)).to_http_exception()
 
     return analysis
+
+
+# ============================================
+# 4. 음성 파일 업로드 → 전사 → 분석 통합 API (HTTP)
+# ============================================
+
+def _prepare_analysis_data_from_dict(utterances: List[dict], speakers: List[str], my_speaker: Optional[str] = None):
+    """전사 결과 dict에서 분석 데이터 전처리"""
+    # 대화 포맷 생성
+    conversation_formatted = "\n".join(
+        f"{u['speaker']}: {u['text']}" for u in utterances
+    )
+
+    # 화자별 세그먼트
+    speaker_segments = []
+    for speaker in speakers:
+        speaker_utterances = [u for u in utterances if u["speaker"] == speaker]
+        full_text = " ".join(u["text"] for u in speaker_utterances)
+        speaker_segments.append({
+            "speaker": speaker,
+            "full_text": full_text,
+            "utterances": speaker_utterances
+        })
+
+    # 상담사(나) / 상대방 결정
+    if my_speaker and my_speaker in speakers:
+        agent_speaker = my_speaker
+        other_speakers = [s for s in speakers if s != agent_speaker]
+    else:
+        # 휴리스틱 fallback
+        customer_speaker = analysis_service._detect_customer_speaker(
+            speaker_segments, utterances
+        )
+        agent_speaker = [s for s in speakers if s != customer_speaker][0] if len(speakers) > 1 else speakers[0]
+        other_speakers = [s for s in speakers if s != agent_speaker]
+
+    # 상대방(들) 텍스트 추출
+    other_text = ""
+    for seg in speaker_segments:
+        if seg["speaker"] in other_speakers:
+            other_text += seg["full_text"] + " "
+
+    # 상담사 텍스트 추출
+    agent_text = ""
+    for seg in speaker_segments:
+        if seg["speaker"] == agent_speaker:
+            agent_text = seg["full_text"]
+            break
+
+    return {
+        "utterances": utterances,
+        "speaker_segments": speaker_segments,
+        "conversation_formatted": conversation_formatted,
+        "agent_speaker": agent_speaker,
+        "other_speakers": other_speakers,
+        "agent_text": agent_text,
+        "other_text": other_text.strip()
+    }
+
+
+@router.post(
+    "/upload",
+    summary="음성 파일 업로드 → 전사 → 분석 (통합 API)",
+    description="음성 파일을 업로드하면 전사(STT)와 종합 분석을 한번에 수행합니다."
+)
+async def analyze_audio_file(
+    file: UploadFile = File(..., description="음성 파일 (mp3, wav, m4a)"),
+    my_speaker: Optional[str] = Form(None, description="본인 화자 (A 또는 B) - 미지정 시 자동 감지"),
+    consultation_type: str = Form("sales", description="상담 유형 (sales/information/complaint)"),
+    script_context: Optional[str] = Form(None, description="회사 스크립트 컨텍스트")
+):
+    """
+    음성 파일 업로드 → 전사 → 종합 분석 (HTTP API)
+
+    ## 요청
+    - `file`: 음성 파일 (mp3, wav, m4a / 최대 30분)
+    - `my_speaker`: (선택) 본인 화자 선택 (A 또는 B)
+    - `consultation_type`: 상담 유형 (sales/information/complaint)
+    - `script_context`: (선택) 회사 스크립트
+
+    ## 응답
+    - `transcript`: 전사 결과 (full_text, utterances, speakers)
+    - `analysis`: 종합 분석 결과
+
+    ## 처리 시간
+    - 5분 음성 기준 약 30~60초 소요
+    """
+    # 파일 확장자 검증
+    allowed_extensions = {".mp3", ".wav", ".m4a"}
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail="지원하지 않는 파일 형식입니다. (mp3, wav, m4a만 가능)"
+        )
+
+    # 파일 저장
+    upload_dir = Path(settings.UPLOAD_DIR)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    file_id = str(uuid.uuid4())
+    file_path = upload_dir / f"{file_id}{file_ext}"
+
+    try:
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # 오디오 길이 확인 (최대 30분)
+        duration_ms = get_audio_duration_ms(str(file_path))
+        max_duration_ms = 30 * 60 * 1000
+        if duration_ms > max_duration_ms:
+            os.remove(file_path)
+            raise HTTPException(
+                status_code=400,
+                detail="음성 파일이 너무 깁니다. (최대 30분)"
+            )
+
+        # 1. 전사 (STT)
+        stt_service = AsyncSTTService()
+        transcript_result = await stt_service.transcribe_with_progress(
+            audio_file_path=str(file_path),
+            language_code="ko"
+        )
+
+        # 2. 분석 데이터 준비
+        data = _prepare_analysis_data_from_dict(
+            utterances=transcript_result["utterances"],
+            speakers=transcript_result["speakers"],
+            my_speaker=my_speaker
+        )
+
+        # 3. 종합 분석
+        analysis = await analysis_service.analyze_call(
+            transcript_id=file_id,
+            conversation_formatted=data["conversation_formatted"],
+            speaker_segments=data["speaker_segments"],
+            utterances=data["utterances"],
+            agent_speaker=data["agent_speaker"],
+            other_speakers=data["other_speakers"],
+            script_context=script_context
+        )
+
+        # 파일 삭제
+        if file_path.exists():
+            os.remove(file_path)
+
+        return {
+            "transcript": {
+                "file_id": file_id,
+                "duration_ms": transcript_result["duration"],
+                "full_text": transcript_result["full_text"],
+                "utterances": transcript_result["utterances"],
+                "speakers": transcript_result["speakers"]
+            },
+            "analysis": analysis
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if file_path.exists():
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"처리 중 오류 발생: {str(e)}")
