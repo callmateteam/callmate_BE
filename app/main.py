@@ -5,6 +5,14 @@ from app.core.config import settings
 from app.api.v1 import api_router
 from app.mcp_server import mcp_app
 
+
+# Combined lifespan to manage MCP session manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage MCP server lifespan along with FastAPI"""
+    async with mcp_app.router.lifespan_context(mcp_app):
+        yield
+
 # API Documentation metadata
 description = """
 ## CallMate AI Backend API
@@ -124,6 +132,7 @@ app = FastAPI(
     license_info={
         "name": "MIT",
     },
+    lifespan=lifespan,  # MCP lifespan 관리
 )
 
 # CORS Middleware
