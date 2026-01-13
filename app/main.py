@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1 import api_router
-from app.mcp_server import mcp, mcp_app
+from app.mcp_server import mcp_app
 
 # API Documentation metadata
 description = """
@@ -159,8 +159,8 @@ async def health_check():
 app.include_router(api_router, prefix="/api/v1")
 
 # MCP Server 마운트 (카카오 PlayMCP 등록용 - Streamable HTTP)
-# mcp_app은 /mcp/mcp 경로에서 MCP 프로토콜 제공
-app.mount("/mcp", mcp_app)
+# MCP 엔드포인트: /mcp (GET/POST 모두 지원)
+app.mount("", mcp_app)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,19 @@
-"""MCP Server for Kakao PlayMCP integration using fastmcp"""
+"""MCP Server for Kakao PlayMCP integration using official MCP SDK"""
 
 import os
 import uuid
 import base64
+import json
 from pathlib import Path
-from typing import Optional
-from fastmcp import FastMCP
+from typing import Optional, Any
+from contextlib import asynccontextmanager
+
+from mcp.server import Server
+from mcp.server.streamable_http import StreamableHTTPServerTransport
+from mcp.types import Tool, TextContent
+from starlette.applications import Starlette
+from starlette.routing import Mount, Route
+from starlette.responses import JSONResponse
 
 from app.core.config import settings
 from app.utils.audio import get_audio_duration_ms
@@ -13,26 +21,8 @@ from app.services.stt_service_async import AsyncSTTService
 from app.services.analysis_service import analysis_service
 
 
-# Create MCP server instance with stateless HTTP mode
-mcp = FastMCP(
-    name="CallMate 통화분석",
-    instructions="""영업/상담 통화를 AI로 분석하고 최적의 응대 방법을 추천하는 서비스입니다.
-
-[분석 기능]
-• 음성→텍스트 전사 (화자 분리 포함)
-• 고객 감정 분석 (긍정/부정/걱정/화남 등)
-• 고객 상태 파악 (관심있음, 고민중, 망설임, 구매준비됨, 불만족 등)
-
-[요약 기능]
-• 대화 핵심 요약 (주요 주제, 질문, 답변)
-• 고객 니즈 분석 (전화 사유, 요구사항, 고민거리)
-• 대화 흐름 및 전환점 파악
-
-[추천 기능]
-• 상담 유형별 맞춤 응대 멘트 3가지 제공
-• 다음 액션 제안 (추가 상담 예정, 견적 발송 등)""",
-    stateless_http=True  # Required for Streamable HTTP
-)
+# Create MCP server instance
+mcp_server = Server(name="CallMate 통화분석")
 
 
 def _prepare_analysis_data_from_dict(utterances: list, speakers: list, my_speaker: Optional[str] = None):
@@ -83,22 +73,7 @@ def _prepare_analysis_data_from_dict(utterances: list, speakers: list, my_speake
     }
 
 
-@mcp.tool(
-    name="analyze_call",
-    description="""음성 파일(base64)을 분석하여 통화 내용을 전사하고 AI로 종합 분석합니다.
-
-입력:
-- audio_base64: 음성 파일의 base64 인코딩 문자열 (mp3, wav, m4a 지원)
-- filename: 파일명 (확장자 포함, 예: "call.mp3")
-- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
-- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
-
-출력:
-- transcript: 전사 결과 (full_text, utterances, speakers)
-- analysis: 종합 분석 결과 (감정, 고객 상태, 요약, 추천 멘트 등)
-"""
-)
-async def analyze_call(
+async def analyze_call_impl(
     audio_base64: str,
     filename: str = "audio.mp3",
     my_speaker: Optional[str] = None,
@@ -182,5 +157,83 @@ async def analyze_call(
         return {"error": f"처리 중 오류 발생: {str(e)}"}
 
 
-# Create HTTP app for mounting
-mcp_app = mcp.http_app(path="/mcp")
+# Register tools
+@mcp_server.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="analyze_call",
+            description="""음성 파일(base64)을 분석하여 통화 내용을 전사하고 AI로 종합 분석합니다.
+
+입력:
+- audio_base64: 음성 파일의 base64 인코딩 문자열 (mp3, wav, m4a 지원)
+- filename: 파일명 (확장자 포함, 예: "call.mp3")
+- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
+- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
+
+출력:
+- transcript: 전사 결과 (full_text, utterances, speakers)
+- analysis: 종합 분석 결과 (감정, 고객 상태, 요약, 추천 멘트 등)""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "audio_base64": {
+                        "type": "string",
+                        "description": "음성 파일의 base64 인코딩 문자열"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "파일명 (확장자 포함)",
+                        "default": "audio.mp3"
+                    },
+                    "my_speaker": {
+                        "type": "string",
+                        "description": "본인 화자 (A 또는 B)"
+                    },
+                    "consultation_type": {
+                        "type": "string",
+                        "description": "상담 유형",
+                        "enum": ["sales", "information", "complaint"],
+                        "default": "sales"
+                    }
+                },
+                "required": ["audio_base64"]
+            }
+        )
+    ]
+
+
+@mcp_server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    if name == "analyze_call":
+        result = await analyze_call_impl(
+            audio_base64=arguments.get("audio_base64", ""),
+            filename=arguments.get("filename", "audio.mp3"),
+            my_speaker=arguments.get("my_speaker"),
+            consultation_type=arguments.get("consultation_type", "sales")
+        )
+        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, default=str))]
+
+    return [TextContent(type="text", text=f"Unknown tool: {name}")]
+
+
+# Create Streamable HTTP transport and app
+transport = StreamableHTTPServerTransport(
+    mcp_endpoint="/mcp",
+    messages_endpoint="/mcp/messages",
+)
+
+
+async def handle_mcp(request):
+    """Handle MCP protocol requests"""
+    return await transport.handle_request(request, mcp_server)
+
+
+# Create Starlette app for MCP
+mcp_app = Starlette(
+    routes=[
+        Route("/mcp", handle_mcp, methods=["GET", "POST"]),
+        Route("/mcp/messages", handle_mcp, methods=["GET", "POST"]),
+        Route("/mcp/messages/", handle_mcp, methods=["GET", "POST"]),
+    ]
+)
