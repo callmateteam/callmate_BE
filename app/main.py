@@ -1,8 +1,9 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1 import api_router
-from fastapi_mcp import FastApiMCP
+from app.mcp_server import mcp, mcp_app
 
 # API Documentation metadata
 description = """
@@ -157,28 +158,9 @@ async def health_check():
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
 
-# MCP Server 마운트 (카카오 PlayMCP 등록용)
-mcp = FastApiMCP(
-    app,
-    name="CallMate 통화분석",
-    description="""영업/상담 통화를 AI로 분석하고 최적의 응대 방법을 추천하는 서비스입니다.
-
-[분석 기능]
-• 음성→텍스트 전사 (화자 분리 포함)
-• 고객 감정 분석 (긍정/부정/걱정/화남 등)
-• 고객 상태 파악 (관심있음, 고민중, 망설임, 구매준비됨, 불만족 등)
-
-[요약 기능]
-• 대화 핵심 요약 (주요 주제, 질문, 답변)
-• 고객 니즈 분석 (전화 사유, 요구사항, 고민거리)
-• 대화 흐름 및 전환점 파악
-
-[추천 기능]
-• 상담 유형별 맞춤 응대 멘트 3가지 제공
-• 다음 액션 제안 (추가 상담 예정, 견적 발송 등)""",
-    include_operations=["analyze_audio_file"]  # upload API만 MCP 도구로 노출
-)
-mcp.mount()
+# MCP Server 마운트 (카카오 PlayMCP 등록용 - Streamable HTTP)
+# mcp_app은 /mcp/mcp 경로에서 MCP 프로토콜 제공
+app.mount("/mcp", mcp_app)
 
 
 if __name__ == "__main__":
