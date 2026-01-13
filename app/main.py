@@ -3,14 +3,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1 import api_router
-from app.mcp_server import mcp_app
+from app.mcp_server import mcp, mcp_app
 
 
 # Combined lifespan to manage MCP session manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage MCP server lifespan along with FastAPI"""
-    async with mcp_app.router.lifespan_context(mcp_app):
+    async with mcp.session_manager.run():
         yield
 
 # API Documentation metadata
