@@ -41,3 +41,6 @@ aiofiles==23.2.1
 # PDF Processing
 pypdf2==3.0.1
 pdfplumber==0.10.3
+
+# MCP (Model Context Protocol)
+fastapi-mcp>=0.3.0
