@@ -20,7 +20,7 @@ google-generativeai==0.8.0  # Gemini API
 tiktoken==0.5.2  # Token counting for prompts
 
 # Audio Processing & STT
-python-multipart==0.0.6
+python-multipart>=0.0.9
 deepgram-sdk==3.4.0  # Fast STT with speaker diarization
 mutagen==1.47.0  # Audio duration detection
 
