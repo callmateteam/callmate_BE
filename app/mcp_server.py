@@ -6,6 +6,7 @@ import base64
 import json
 from pathlib import Path
 from typing import Optional
+import httpx
 
 from mcp.server.fastmcp import FastMCP
 
@@ -181,6 +182,151 @@ async def analyze_call(
         if file_path.exists():
             os.remove(file_path)
         return {"error": f"처리 중 오류 발생: {str(e)}"}
+
+
+@mcp.tool(
+    name="analyze_call_from_url",
+    description="""공개 URL의 음성 파일을 다운로드하여 분석합니다.
+
+사용 예시:
+- analyze_call_from_url("https://callmate-uploads.s3.ap-northeast-2.amazonaws.com/samples/sample1.mp3")
+
+입력:
+- audio_url: 음성 파일의 공개 URL (mp3, wav, m4a 지원)
+- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
+- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
+
+출력:
+- transcript: 전사 결과 (full_text, utterances, speakers)
+- analysis: 종합 분석 결과 (감정, 고객 상태, 요약, 추천 멘트 등)"""
+)
+async def analyze_call_from_url(
+    audio_url: str,
+    my_speaker: Optional[str] = None,
+    consultation_type: str = "sales"
+) -> dict:
+    """URL에서 음성 파일을 다운로드하여 분석합니다."""
+
+    # URL에서 파일명 추출
+    try:
+        filename = audio_url.split("/")[-1].split("?")[0]
+        if not filename:
+            filename = "audio.mp3"
+    except:
+        filename = "audio.mp3"
+
+    file_ext = Path(filename).suffix.lower()
+    allowed_extensions = {".mp3", ".wav", ".m4a"}
+    if file_ext not in allowed_extensions:
+        return {"error": "지원하지 않는 파일 형식입니다. (mp3, wav, m4a만 가능)"}
+
+    # 파일 다운로드
+    upload_dir = Path(settings.UPLOAD_DIR)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    file_id = str(uuid.uuid4())
+    file_path = upload_dir / f"{file_id}{file_ext}"
+
+    try:
+        # httpx로 파일 다운로드
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.get(audio_url)
+            response.raise_for_status()
+            file_content = response.content
+
+        with open(file_path, "wb") as f:
+            f.write(file_content)
+
+        # 오디오 길이 확인 (최대 30분)
+        duration_ms = get_audio_duration_ms(str(file_path))
+        max_duration_ms = 30 * 60 * 1000
+        if duration_ms > max_duration_ms:
+            os.remove(file_path)
+            return {"error": "음성 파일이 너무 깁니다. (최대 30분)"}
+
+        # 1. 전사 (STT)
+        stt_service = AsyncSTTService()
+        transcript_result = await stt_service.transcribe_with_progress(
+            audio_file_path=str(file_path),
+            language_code="ko"
+        )
+
+        # 2. 분석 데이터 준비
+        data = _prepare_analysis_data_from_dict(
+            utterances=transcript_result["utterances"],
+            speakers=transcript_result["speakers"],
+            my_speaker=my_speaker
+        )
+
+        # 3. 종합 분석
+        analysis = await analysis_service.analyze_call(
+            transcript_id=file_id,
+            conversation_formatted=data["conversation_formatted"],
+            speaker_segments=data["speaker_segments"],
+            utterances=data["utterances"],
+            agent_speaker=data["agent_speaker"],
+            other_speakers=data["other_speakers"],
+            script_context=None
+        )
+
+        # 파일 삭제
+        if file_path.exists():
+            os.remove(file_path)
+
+        return {
+            "transcript": {
+                "file_id": file_id,
+                "duration_ms": transcript_result["duration"],
+                "full_text": transcript_result["full_text"],
+                "utterances": transcript_result["utterances"],
+                "speakers": transcript_result["speakers"]
+            },
+            "analysis": analysis
+        }
+
+    except httpx.HTTPError as e:
+        if file_path.exists():
+            os.remove(file_path)
+        return {"error": f"URL에서 파일을 다운로드할 수 없습니다: {str(e)}"}
+    except Exception as e:
+        if file_path.exists():
+            os.remove(file_path)
+        return {"error": f"처리 중 오류 발생: {str(e)}"}
+
+
+@mcp.tool(
+    name="analyze_sample_call",
+    description="""샘플 통화 녹음을 분석합니다. 테스트용으로 미리 준비된 샘플 파일을 사용합니다.
+
+사용 예시:
+- analyze_sample_call("sample1") - 영업 통화 샘플
+- analyze_sample_call("sample2") - 고객 상담 샘플
+
+입력:
+- sample_id: 샘플 파일 ID (sample1, sample2 등)
+- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
+- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
+
+출력:
+- transcript: 전사 결과
+- analysis: 종합 분석 결과"""
+)
+async def analyze_sample_call(
+    sample_id: str = "sample1",
+    my_speaker: Optional[str] = None,
+    consultation_type: str = "sales"
+) -> dict:
+    """샘플 파일을 분석합니다."""
+
+    # S3 샘플 URL 생성
+    sample_url = f"https://callmate-uploads.s3.ap-northeast-2.amazonaws.com/samples/{sample_id}.mp3"
+
+    # URL 기반 분석 재사용
+    return await analyze_call_from_url(
+        audio_url=sample_url,
+        my_speaker=my_speaker,
+        consultation_type=consultation_type
+    )
 
 
 # Create Streamable HTTP app for mounting
