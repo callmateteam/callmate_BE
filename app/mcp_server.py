@@ -21,6 +21,8 @@ mcp = FastMCP(
     name="CallMate 통화분석",
     instructions="""영업/상담 통화를 AI로 분석하고 최적의 응대 방법을 추천하는 서비스입니다.
 
+🌐 홈페이지: https://callmate-fe.vercel.app/
+
 [분석 기능]
 • 음성→텍스트 전사 (화자 분리 포함)
 • 고객 감정 분석 (긍정/부정/걱정/화남 등)
@@ -33,6 +35,9 @@ mcp = FastMCP(
 
 [추천 기능]
 • 상담 유형별 맞춤 응대 멘트 3가지 제공
+  - 판매/설득: 손실 강조, 대안 제시, 마무리 멘트
+  - 안내/정보: 핵심 포인트, 추가 안내, 마무리 멘트
+  - 불만/문제: 공감 표현, 해결 방안, 마무리 멘트
 • 다음 액션 제안 (추가 상담 예정, 견적 발송 등)""",
     stateless_http=True  # Required for Streamable HTTP
 )
