@@ -93,17 +93,21 @@ def _prepare_analysis_data_from_dict(utterances: list, speakers: list, my_speake
 
 @mcp.tool(
     name="analyze_call",
-    description="""음성 파일(base64)을 분석하여 통화 내용을 전사하고 AI로 종합 분석합니다.
+    description="""[파일 업로드용] Base64 인코딩된 음성 파일을 분석합니다.
+
+★ 이 도구를 사용해야 하는 경우:
+- 사용자가 음성 파일을 직접 업로드했을 때
+- base64로 인코딩된 오디오 데이터가 제공되었을 때
+
+※ 파일 업로드가 불가능한 환경에서는 analyze_sample_call을 사용하세요.
 
 입력:
-- audio_base64: 음성 파일의 base64 인코딩 문자열 (mp3, wav, m4a 지원)
-- filename: 파일명 (확장자 포함, 예: "call.mp3")
-- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
-- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
+- audio_base64: base64 인코딩된 음성 (mp3, wav, m4a)
+- filename: 파일명 (예: "call.mp3")
+- my_speaker: 본인 화자 (선택, A/B)
+- consultation_type: sales/information/complaint
 
-출력:
-- transcript: 전사 결과 (full_text, utterances, speakers)
-- analysis: 종합 분석 결과 (감정, 고객 상태, 요약, 추천 멘트 등)"""
+출력: 전사 결과 + AI 종합 분석"""
 )
 async def analyze_call(
     audio_base64: str,
@@ -191,19 +195,18 @@ async def analyze_call(
 
 @mcp.tool(
     name="analyze_call_from_url",
-    description="""공개 URL의 음성 파일을 다운로드하여 분석합니다.
+    description="""[URL 링크용] 공개 URL의 음성 파일을 다운로드하여 분석합니다.
 
-사용 예시:
-- analyze_call_from_url("https://callmate-uploads.s3.ap-northeast-2.amazonaws.com/samples/sample1.mp3")
+★ 이 도구를 사용해야 하는 경우:
+- 사용자가 음성 파일 URL을 제공했을 때
+- "이 링크 분석해줘", "URL 분석" 등의 요청
 
 입력:
-- audio_url: 음성 파일의 공개 URL (mp3, wav, m4a 지원)
-- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
-- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
+- audio_url: 음성 파일 URL (mp3, wav, m4a)
+- my_speaker: 본인 화자 (선택, A/B)
+- consultation_type: sales/information/complaint
 
-출력:
-- transcript: 전사 결과 (full_text, utterances, speakers)
-- analysis: 종합 분석 결과 (감정, 고객 상태, 요약, 추천 멘트 등)"""
+출력: 전사 결과 + AI 종합 분석"""
 )
 async def analyze_call_from_url(
     audio_url: str,
@@ -301,20 +304,23 @@ async def analyze_call_from_url(
 
 @mcp.tool(
     name="analyze_sample_call",
-    description="""샘플 통화 녹음을 분석합니다. 테스트용으로 미리 준비된 샘플 파일을 사용합니다.
+    description="""[테스트용 필수 도구] 미리 준비된 샘플 통화를 분석합니다. 파일 업로드 없이 바로 테스트할 수 있습니다.
 
-사용 예시:
-- analyze_sample_call("sample1") - 영업 통화 샘플
-- analyze_sample_call("sample2") - 고객 상담 샘플
+★ 이 도구를 사용해야 하는 경우:
+- "sample1 분석", "sample2 분석", "샘플 분석", "샘플 통화 분석"
+- "테스트", "데모", "체험", "시연"이라는 단어가 포함된 요청
+- 사용자가 파일을 제공하지 않고 분석을 요청할 때
+
+사용 가능한 샘플:
+- sample1: 스마트홈 영업 통화 (약 5분, 상담사가 고객에게 제품 설명)
+- sample2: 고객 상담 통화 (약 5분, 고객 문의 응대)
 
 입력:
-- sample_id: 샘플 파일 ID (sample1, sample2 등)
-- my_speaker: (선택) 본인 화자 (A 또는 B) - 미지정 시 자동 감지
-- consultation_type: 상담 유형 (sales/information/complaint), 기본값: sales
+- sample_id: "sample1" 또는 "sample2" (기본값: sample1)
+- my_speaker: 본인 화자 지정 (선택, A/B)
+- consultation_type: sales/information/complaint (기본값: sales)
 
-출력:
-- transcript: 전사 결과
-- analysis: 종합 분석 결과"""
+출력: 전사 결과 + AI 종합 분석 (감정, 요약, 추천 멘트)"""
 )
 async def analyze_sample_call(
     sample_id: str = "sample1",
