@@ -1,0 +1,183 @@
+openapi: 3.1.0
+info:
+  title: CallMate 통화분석 API
+  description: 영업/상담 통화를 AI로 분석하고 최적의 응대 방법을 추천하는 서비스
+  version: 1.0.0
+servers:
+  - url: https://d3hx7eokxq3pj4.cloudfront.net
+    description: Production server
+
+paths:
+  /api/v1/files/upload/audio:
+    post:
+      operationId: uploadAudioFile
+      summary: 음성 파일 업로드
+      description: |
+        음성 파일을 서버에 업로드하고 분석용 URL을 반환합니다.
+        사용자가 음성 파일을 업로드하면 이 API를 먼저 호출하세요.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 음성 파일 (mp3, wav, m4a)
+              required:
+                - file
+      responses:
+        '200':
+          description: 업로드 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file_key:
+                    type: string
+                    description: 파일 식별자
+                  file_url:
+                    type: string
+                    description: 분석에 사용할 파일 URL
+                  storage:
+                    type: string
+                    description: 저장소 타입 (s3/local)
+                  filename:
+                    type: string
+                    description: 원본 파일명
+                  size_bytes:
+                    type: integer
+                    description: 파일 크기 (bytes)
+        '400':
+          description: 잘못된 요청
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/calls/analyze-url:
+    post:
+      operationId: analyzeCallFromUrl
+      summary: URL로 통화 분석
+      description: |
+        음성 파일 URL을 받아 전사 및 AI 분석을 수행합니다.
+        uploadAudioFile로 받은 file_url을 audio_url에 전달하세요.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                audio_url:
+                  type: string
+                  description: 음성 파일 URL (uploadAudioFile에서 받은 file_url)
+                my_speaker:
+                  type: string
+                  description: 본인 화자 (A 또는 B, 선택사항)
+                  enum: [A, B]
+                consultation_type:
+                  type: string
+                  description: 상담 유형
+                  enum: [sales, information, complaint]
+                  default: sales
+              required:
+                - audio_url
+      responses:
+        '200':
+          description: 분석 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transcript:
+                    type: object
+                    description: 전사 결과
+                    properties:
+                      file_id:
+                        type: string
+                      duration_ms:
+                        type: integer
+                      full_text:
+                        type: string
+                      utterances:
+                        type: array
+                        items:
+                          type: object
+                      speakers:
+                        type: array
+                        items:
+                          type: string
+                  analysis:
+                    type: object
+                    description: AI 분석 결과 (감정, 요약, 추천 멘트)
+                  processing_time:
+                    type: object
+                    properties:
+                      stt_seconds:
+                        type: number
+                      analysis_seconds:
+                        type: number
+                      total_seconds:
+                        type: number
+        '400':
+          description: 잘못된 요청
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/calls/analyze-sample:
+    post:
+      operationId: analyzeSampleCall
+      summary: 샘플 통화 분석 (테스트용)
+      description: |
+        미리 준비된 샘플 통화를 분석합니다.
+        파일 업로드 없이 바로 테스트할 수 있습니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sample_id:
+                  type: string
+                  description: 샘플 ID
+                  enum: [sample1, sample2]
+                  default: sample1
+                my_speaker:
+                  type: string
+                  description: 본인 화자 (A 또는 B, 선택사항)
+                  enum: [A, B]
+                consultation_type:
+                  type: string
+                  description: 상담 유형
+                  enum: [sales, information, complaint]
+                  default: sales
+      responses:
+        '200':
+          description: 분석 성공
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transcript:
+                    type: object
+                  analysis:
+                    type: object
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
