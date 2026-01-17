@@ -118,10 +118,10 @@ async def analyze_call(
     """음성 파일을 분석하여 전사 및 종합 분석 결과를 반환합니다."""
 
     # 파일 확장자 검증
-    allowed_extensions = {".mp3", ".wav", ".m4a"}
+    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus"}
     file_ext = Path(filename).suffix.lower()
     if file_ext not in allowed_extensions:
-        return {"error": "지원하지 않는 파일 형식입니다. (mp3, wav, m4a만 가능)"}
+        return {"error": "지원하지 않는 파일 형식입니다. (mp3, wav, m4a, ogg, webm 가능)"}
 
     # Base64 디코딩 (다양한 포맷 지원)
     try:
@@ -210,14 +210,21 @@ async def analyze_call(
 
 @mcp.tool(
     name="analyze_call_from_url",
-    description="""[URL 링크용] 공개 URL의 음성 파일을 다운로드하여 분석합니다.
+    description="""[파일 업로드 및 URL용 - 권장] 음성 파일 URL을 받아서 분석합니다.
 
-★ 이 도구를 사용해야 하는 경우:
-- 사용자가 음성 파일 URL을 제공했을 때
-- "이 링크 분석해줘", "URL 분석" 등의 요청
+★★★ 중요: 사용자가 음성 파일을 업로드하면 이 도구를 사용하세요! ★★★
+
+이 도구를 사용해야 하는 경우:
+1. 사용자가 음성 파일을 업로드했을 때 → 파일의 sandbox URL 사용
+2. 사용자가 음성 파일 URL/링크를 제공했을 때
+3. "이 파일 분석해줘", "녹음 분석", "통화 분석" 요청
+
+사용자가 파일 업로드 시:
+- ChatGPT sandbox의 파일 경로(예: /mnt/data/파일명.mp3)가 아닌
+- 파일의 다운로드 가능한 URL을 audio_url에 전달하세요
 
 입력:
-- audio_url: 음성 파일 URL (mp3, wav, m4a)
+- audio_url: 음성 파일 URL (mp3, wav, m4a, ogg, webm)
 - my_speaker: 본인 화자 (선택, A/B)
 - consultation_type: sales/information/complaint
 
@@ -239,9 +246,10 @@ async def analyze_call_from_url(
         filename = "audio.mp3"
 
     file_ext = Path(filename).suffix.lower()
-    allowed_extensions = {".mp3", ".wav", ".m4a"}
-    if file_ext not in allowed_extensions:
-        return {"error": "지원하지 않는 파일 형식입니다. (mp3, wav, m4a만 가능)"}
+    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus"}
+    if not file_ext or file_ext not in allowed_extensions:
+        # 확장자 없으면 mp3로 가정
+        file_ext = ".mp3"
 
     # 파일 다운로드
     upload_dir = Path(settings.UPLOAD_DIR)
