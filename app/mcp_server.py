@@ -91,21 +91,40 @@ def _prepare_analysis_data_from_dict(utterances: list, speakers: list, my_speake
     }
 
 
+def _convert_to_wav(input_path: str, output_path: str) -> bool:
+    """ffmpeg를 사용해 오디오를 WAV로 변환"""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-y', '-i', input_path, '-ar', '16000', '-ac', '1', output_path],
+            capture_output=True,
+            timeout=60
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 @mcp.tool(
     name="analyze_call",
-    description="""[파일 업로드용] Base64 인코딩된 음성 파일을 분석합니다.
+    description="""[파일 업로드용 - 권장] 사용자가 업로드한 음성 파일을 분석합니다.
 
-★ 이 도구를 사용해야 하는 경우:
-- 사용자가 음성 파일을 직접 업로드했을 때
-- base64로 인코딩된 오디오 데이터가 제공되었을 때
+★★★ ChatGPT/Claude에서 파일 업로드 시 이 도구를 사용하세요! ★★★
 
-※ 파일 업로드가 불가능한 환경에서는 analyze_sample_call을 사용하세요.
+사용 방법:
+1. 사용자가 음성 파일을 업로드하면
+2. 파일을 base64로 인코딩하여 audio_base64에 전달
+3. 원본 파일명을 filename에 전달
+
+지원 포맷: mp3, wav, m4a, ogg, webm, opus
+최대 파일 크기: 25MB
+최대 길이: 30분
 
 입력:
-- audio_base64: base64 인코딩된 음성 (mp3, wav, m4a)
-- filename: 파일명 (예: "call.mp3")
-- my_speaker: 본인 화자 (선택, A/B)
-- consultation_type: sales/information/complaint
+- audio_base64: base64 인코딩된 음성 데이터
+- filename: 원본 파일명 (예: "call.mp3")
+- my_speaker: 본인 화자 지정 (선택, A/B)
+- consultation_type: 상담 유형 (sales/information/complaint)
 
 출력: 전사 결과 + AI 종합 분석"""
 )
@@ -118,31 +137,38 @@ async def analyze_call(
     """음성 파일을 분석하여 전사 및 종합 분석 결과를 반환합니다."""
 
     # 파일 확장자 검증
-    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus"}
+    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus", ".aac", ".flac"}
     file_ext = Path(filename).suffix.lower()
-    if file_ext not in allowed_extensions:
-        return {"error": "지원하지 않는 파일 형식입니다. (mp3, wav, m4a, ogg, webm 가능)"}
+    if not file_ext or file_ext not in allowed_extensions:
+        file_ext = ".mp3"  # 확장자 없으면 mp3로 가정
 
     # Base64 디코딩 (다양한 포맷 지원)
     try:
+        # 공백 및 줄바꿈 제거
+        audio_base64 = audio_base64.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+
         # data:audio/... 형식 처리
-        if "," in audio_base64 and audio_base64.startswith("data:"):
+        if "," in audio_base64 and "base64" in audio_base64.lower():
             audio_base64 = audio_base64.split(",", 1)[1]
 
-        # URL-safe base64 및 패딩 처리
+        # URL-safe base64 변환
         audio_base64 = audio_base64.replace("-", "+").replace("_", "/")
-        padding = 4 - len(audio_base64) % 4
-        if padding != 4:
-            audio_base64 += "=" * padding
 
-        file_content = base64.b64decode(audio_base64)
+        # 패딩 처리
+        missing_padding = len(audio_base64) % 4
+        if missing_padding:
+            audio_base64 += "=" * (4 - missing_padding)
 
-        # 최소 파일 크기 검증 (1KB 이상)
-        if len(file_content) < 1024:
-            return {"error": "파일이 너무 작습니다. 올바른 음성 파일인지 확인해주세요."}
+        file_content = base64.b64decode(audio_base64, validate=True)
+
+        # 파일 크기 검증
+        if len(file_content) < 1000:
+            return {"error": "파일이 너무 작습니다. 유효한 음성 파일인지 확인해주세요."}
+        if len(file_content) > 25 * 1024 * 1024:  # 25MB
+            return {"error": "파일이 너무 큽니다. 최대 25MB까지 지원합니다."}
 
     except Exception as e:
-        return {"error": f"잘못된 base64 데이터입니다: {str(e)}"}
+        return {"error": f"base64 디코딩 실패: {str(e)}. 파일이 올바르게 인코딩되었는지 확인해주세요."}
 
     # 파일 저장
     upload_dir = Path(settings.UPLOAD_DIR)
@@ -151,21 +177,37 @@ async def analyze_call(
     file_id = str(uuid.uuid4())
     file_path = upload_dir / f"{file_id}{file_ext}"
 
+    wav_path = None
     try:
         with open(file_path, "wb") as f:
             f.write(file_content)
 
+        # 오디오 포맷 검증 및 변환
+        wav_path = upload_dir / f"{file_id}_converted.wav"
+        if not _convert_to_wav(str(file_path), str(wav_path)):
+            # 변환 실패 시 원본 파일 사용 시도
+            wav_path = None
+            actual_path = str(file_path)
+        else:
+            actual_path = str(wav_path)
+
         # 오디오 길이 확인 (최대 30분)
-        duration_ms = get_audio_duration_ms(str(file_path))
+        try:
+            duration_ms = get_audio_duration_ms(actual_path)
+        except Exception:
+            duration_ms = get_audio_duration_ms(str(file_path))
         max_duration_ms = 30 * 60 * 1000
         if duration_ms > max_duration_ms:
-            os.remove(file_path)
+            if file_path.exists():
+                os.remove(file_path)
+            if wav_path and wav_path.exists():
+                os.remove(wav_path)
             return {"error": "음성 파일이 너무 깁니다. (최대 30분)"}
 
-        # 1. 전사 (STT)
+        # 1. 전사 (STT) - 변환된 WAV 또는 원본 사용
         stt_service = AsyncSTTService()
         transcript_result = await stt_service.transcribe_with_progress(
-            audio_file_path=str(file_path),
+            audio_file_path=actual_path,
             language_code="ko"
         )
 
@@ -190,6 +232,8 @@ async def analyze_call(
         # 파일 삭제
         if file_path.exists():
             os.remove(file_path)
+        if wav_path and wav_path.exists():
+            os.remove(wav_path)
 
         return {
             "transcript": {
@@ -205,6 +249,8 @@ async def analyze_call(
     except Exception as e:
         if file_path.exists():
             os.remove(file_path)
+        if wav_path and wav_path.exists():
+            os.remove(wav_path)
         return {"error": f"처리 중 오류 발생: {str(e)}"}
 
 
