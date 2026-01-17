@@ -107,26 +107,29 @@ def _convert_to_wav(input_path: str, output_path: str) -> bool:
 
 @mcp.tool(
     name="analyze_call",
-    description="""[파일 업로드용 - 권장] 사용자가 업로드한 음성 파일을 분석합니다.
+    description="""[파일 업로드용] 사용자가 업로드한 음성 파일을 분석합니다.
 
-★★★ ChatGPT/Claude에서 파일 업로드 시 이 도구를 사용하세요! ★★★
+★★★ 중요: 사용자가 음성 파일을 업로드하면 반드시 이 도구를 사용하세요! ★★★
 
-사용 방법:
-1. 사용자가 음성 파일을 업로드하면
-2. 파일을 base64로 인코딩하여 audio_base64에 전달
-3. 원본 파일명을 filename에 전달
+사용 방법 (필수):
+1. 업로드된 파일을 Python 코드로 읽어서 base64 인코딩
+2. 인코딩된 문자열을 audio_base64 파라미터에 전달
 
-지원 포맷: mp3, wav, m4a, ogg, webm, opus
-최대 파일 크기: 25MB
-최대 길이: 30분
+Python 코드 예시:
+```python
+import base64
+with open('/mnt/data/파일명.mp3', 'rb') as f:
+    audio_base64 = base64.b64encode(f.read()).decode('utf-8')
+```
+
+지원 포맷: mp3, wav, m4a, ogg, webm, opus, aac, flac
+최대 파일 크기: 25MB / 최대 길이: 30분
 
 입력:
-- audio_base64: base64 인코딩된 음성 데이터
+- audio_base64: base64 인코딩된 음성 데이터 (필수)
 - filename: 원본 파일명 (예: "call.mp3")
-- my_speaker: 본인 화자 지정 (선택, A/B)
-- consultation_type: 상담 유형 (sales/information/complaint)
 
-출력: 전사 결과 + AI 종합 분석"""
+출력: 전사 결과 + AI 종합 분석 (감정, 요약, 추천 멘트)"""
 )
 async def analyze_call(
     audio_base64: str,
