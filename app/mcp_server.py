@@ -108,16 +108,16 @@ def _convert_to_wav(input_path: str, output_path: str) -> bool:
 
 @mcp.tool(
     name="analyze_call",
-    description="""[파일 업로드용] 사용자가 업로드한 음성 파일을 분석합니다.
+    description="""[파일 업로드 안내] 음성 파일 분석을 위한 업로드 방법을 안내합니다.
 
-★★★ 파일 업로드 시 아래 Python 코드를 실행하세요! ★★★
+★★★ 중요: 이 도구는 직접 파일을 받지 않습니다! ★★★
 
-사용자가 음성 파일을 업로드하면, 아래 코드로 서버에 직접 업로드 후 URL을 받아 분석하세요:
+사용자가 음성 파일을 업로드하면, 반드시 아래 Python 코드를 실행하여 파일을 서버에 업로드하세요:
 
 ```python
 import requests
 
-# 1. 파일을 CallMate 서버에 업로드
+# 파일을 CallMate 서버에 업로드
 with open('/mnt/data/파일명.mp3', 'rb') as f:
     response = requests.post(
         'https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
@@ -126,165 +126,56 @@ with open('/mnt/data/파일명.mp3', 'rb') as f:
     result = response.json()
     file_url = result['file_url']
     print(f"업로드 완료: {file_url}")
-
-# 2. 반환된 URL로 analyze_call_from_url 도구 호출
 ```
 
-위 코드 실행 후, 출력된 file_url을 analyze_call_from_url 도구의 audio_url에 전달하세요.
+위 코드 실행 후, 출력된 file_url을 analyze_call_from_url 도구에 전달하세요.
 
-또는 base64로 직접 전달 (작은 파일만 가능):
-- audio_base64: base64 인코딩된 음성 데이터
-- filename: 원본 파일명
-
-지원 포맷: mp3, wav, m4a / 최대: 25MB, 30분"""
+입력: 없음 (이 도구는 안내용입니다)
+출력: 업로드 방법 안내"""
 )
-async def analyze_call(
-    audio_base64: str,
-    filename: str = "audio.mp3",
-    my_speaker: Optional[str] = None,
-    consultation_type: str = "sales"
-) -> dict:
-    """음성 파일을 분석하여 전사 및 종합 분석 결과를 반환합니다."""
+async def analyze_call() -> dict:
+    """파일 업로드 방법을 안내합니다."""
+    return {
+        "message": "음성 파일 분석을 위해 아래 단계를 따라주세요:",
+        "step1": "Python 코드로 파일을 서버에 업로드",
+        "code": """import requests
 
-    # 파일 확장자 검증
-    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus", ".aac", ".flac"}
-    file_ext = Path(filename).suffix.lower()
-    if not file_ext or file_ext not in allowed_extensions:
-        file_ext = ".mp3"  # 확장자 없으면 mp3로 가정
-
-    # Base64 디코딩 (다양한 포맷 지원)
-    try:
-        # 공백 및 줄바꿈 제거
-        audio_base64 = audio_base64.strip().replace("\n", "").replace("\r", "").replace(" ", "")
-
-        # data:audio/... 형식 처리
-        if "," in audio_base64 and "base64" in audio_base64.lower():
-            audio_base64 = audio_base64.split(",", 1)[1]
-
-        # URL-safe base64 변환
-        audio_base64 = audio_base64.replace("-", "+").replace("_", "/")
-
-        # 패딩 처리
-        missing_padding = len(audio_base64) % 4
-        if missing_padding:
-            audio_base64 += "=" * (4 - missing_padding)
-
-        file_content = base64.b64decode(audio_base64, validate=True)
-
-        # 파일 크기 검증
-        if len(file_content) < 1000:
-            return {"error": "파일이 너무 작습니다. 유효한 음성 파일인지 확인해주세요."}
-        if len(file_content) > 25 * 1024 * 1024:  # 25MB
-            return {"error": "파일이 너무 큽니다. 최대 25MB까지 지원합니다."}
-
-    except Exception as e:
-        return {"error": f"base64 디코딩 실패: {str(e)}. 파일이 올바르게 인코딩되었는지 확인해주세요."}
-
-    # 파일 저장
-    upload_dir = Path(settings.UPLOAD_DIR)
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    file_id = str(uuid.uuid4())
-    file_path = upload_dir / f"{file_id}{file_ext}"
-
-    wav_path = None
-    try:
-        with open(file_path, "wb") as f:
-            f.write(file_content)
-
-        # 오디오 포맷 검증 및 변환
-        wav_path = upload_dir / f"{file_id}_converted.wav"
-        if not _convert_to_wav(str(file_path), str(wav_path)):
-            # 변환 실패 시 원본 파일 사용 시도
-            wav_path = None
-            actual_path = str(file_path)
-        else:
-            actual_path = str(wav_path)
-
-        # 오디오 길이 확인 (최대 30분)
-        try:
-            duration_ms = get_audio_duration_ms(actual_path)
-        except Exception:
-            duration_ms = get_audio_duration_ms(str(file_path))
-        max_duration_ms = 30 * 60 * 1000
-        if duration_ms > max_duration_ms:
-            if file_path.exists():
-                os.remove(file_path)
-            if wav_path and wav_path.exists():
-                os.remove(wav_path)
-            return {"error": "음성 파일이 너무 깁니다. (최대 30분)"}
-
-        # 1. 전사 (STT) - 변환된 WAV 또는 원본 사용
-        stt_service = AsyncSTTService()
-        transcript_result = await stt_service.transcribe_with_progress(
-            audio_file_path=actual_path,
-            language_code="ko"
-        )
-
-        # 2. 분석 데이터 준비
-        data = _prepare_analysis_data_from_dict(
-            utterances=transcript_result["utterances"],
-            speakers=transcript_result["speakers"],
-            my_speaker=my_speaker
-        )
-
-        # 3. 종합 분석
-        analysis = await analysis_service.analyze_call(
-            transcript_id=file_id,
-            conversation_formatted=data["conversation_formatted"],
-            speaker_segments=data["speaker_segments"],
-            utterances=data["utterances"],
-            agent_speaker=data["agent_speaker"],
-            other_speakers=data["other_speakers"],
-            script_context=None
-        )
-
-        # 파일 삭제
-        if file_path.exists():
-            os.remove(file_path)
-        if wav_path and wav_path.exists():
-            os.remove(wav_path)
-
-        return {
-            "transcript": {
-                "file_id": file_id,
-                "duration_ms": transcript_result["duration"],
-                "full_text": transcript_result["full_text"],
-                "utterances": transcript_result["utterances"],
-                "speakers": transcript_result["speakers"]
-            },
-            "analysis": analysis
-        }
-
-    except Exception as e:
-        if file_path.exists():
-            os.remove(file_path)
-        if wav_path and wav_path.exists():
-            os.remove(wav_path)
-        return {"error": f"처리 중 오류 발생: {str(e)}"}
+with open('/mnt/data/파일명.mp3', 'rb') as f:
+    response = requests.post(
+        'https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
+        files={'file': ('파일명.mp3', f, 'audio/mpeg')}
+    )
+    result = response.json()
+    file_url = result['file_url']
+    print(f"업로드 완료: {file_url}")""",
+        "step2": "출력된 file_url을 analyze_call_from_url 도구의 audio_url 파라미터에 전달",
+        "sample_test": "테스트가 필요하면 analyze_sample_call 도구를 사용하세요 (sample1 또는 sample2)"
+    }
 
 
 @mcp.tool(
     name="analyze_call_from_url",
-    description="""[파일 업로드 및 URL용 - 권장] 음성 파일 URL을 받아서 분석합니다.
+    description="""[메인 분석 도구] 음성 파일 URL을 받아서 전사 및 AI 분석을 수행합니다.
 
-★★★ 중요: 사용자가 음성 파일을 업로드하면 이 도구를 사용하세요! ★★★
+★★★ 파일 업로드 분석 방법 (필수!) ★★★
 
-이 도구를 사용해야 하는 경우:
-1. 사용자가 음성 파일을 업로드했을 때 → 파일의 sandbox URL 사용
-2. 사용자가 음성 파일 URL/링크를 제공했을 때
-3. "이 파일 분석해줘", "녹음 분석", "통화 분석" 요청
-
-사용자가 파일 업로드 시:
-- ChatGPT sandbox의 파일 경로(예: /mnt/data/파일명.mp3)가 아닌
-- 파일의 다운로드 가능한 URL을 audio_url에 전달하세요
+사용자가 음성 파일을 업로드하면:
+1. 먼저 Python 코드로 파일을 서버에 업로드하세요:
+```python
+import requests
+with open('/mnt/data/업로드된파일.mp3', 'rb') as f:
+    r = requests.post('https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
+                      files={'file': f})
+    file_url = r.json()['file_url']
+```
+2. 반환된 file_url을 이 도구의 audio_url에 전달하세요
 
 입력:
-- audio_url: 음성 파일 URL (mp3, wav, m4a, ogg, webm)
+- audio_url: 음성 파일 URL (업로드 후 받은 URL 또는 공개 URL)
 - my_speaker: 본인 화자 (선택, A/B)
 - consultation_type: sales/information/complaint
 
-출력: 전사 결과 + AI 종합 분석"""
+출력: 전사 결과 (화자 분리) + AI 종합 분석 (감정, 요약, 추천 멘트)"""
 )
 async def analyze_call_from_url(
     audio_url: str,
@@ -519,93 +410,42 @@ async def transcribe_call(
 
 @mcp.tool(
     name="upload_audio",
-    description="""[파일 업로드 1단계] 음성 파일을 서버에 업로드하고 URL을 반환합니다.
+    description="""[파일 업로드 안내] HTTP API로 파일을 업로드하는 방법을 안내합니다.
 
-★★★ 대용량 파일 분석 시 이 도구를 먼저 사용하세요! ★★★
+★★★ 중요: 이 도구는 base64를 받지 않습니다! ★★★
 
-사용 시나리오:
-1. 사용자가 음성 파일을 업로드함
-2. upload_audio로 파일을 서버에 업로드 → URL 반환
-3. analyze_call_from_url로 반환된 URL 분석
-
-사용 방법:
+파일 업로드는 반드시 Python requests를 사용하세요:
 ```python
-import base64
+import requests
 with open('/mnt/data/파일명.mp3', 'rb') as f:
-    audio_base64 = base64.b64encode(f.read()).decode('utf-8')
+    response = requests.post(
+        'https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
+        files={'file': ('파일명.mp3', f, 'audio/mpeg')}
+    )
+    file_url = response.json()['file_url']
 ```
 
-입력:
-- audio_base64: base64 인코딩된 음성 데이터
-- filename: 파일명 (예: "call.mp3")
-
-출력:
-- file_url: 분석에 사용할 URL (analyze_call_from_url에 전달)
-- file_key: 파일 식별자"""
+입력: 없음
+출력: 업로드 방법 안내"""
 )
-async def upload_audio(
-    audio_base64: str,
-    filename: str = "audio.mp3"
-) -> dict:
-    """음성 파일을 S3에 업로드하고 URL을 반환합니다."""
+async def upload_audio() -> dict:
+    """파일 업로드 방법을 안내합니다."""
+    return {
+        "message": "음성 파일 업로드는 HTTP API를 사용하세요:",
+        "upload_url": "https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio",
+        "method": "POST",
+        "code": """import requests
 
-    # 파일 확장자 검증
-    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus", ".aac", ".flac"}
-    file_ext = Path(filename).suffix.lower()
-    if not file_ext or file_ext not in allowed_extensions:
-        file_ext = ".mp3"
-        filename = f"audio{file_ext}"
-
-    # Base64 디코딩
-    try:
-        audio_base64 = audio_base64.strip().replace("\n", "").replace("\r", "").replace(" ", "")
-
-        if "," in audio_base64 and "base64" in audio_base64.lower():
-            audio_base64 = audio_base64.split(",", 1)[1]
-
-        audio_base64 = audio_base64.replace("-", "+").replace("_", "/")
-
-        missing_padding = len(audio_base64) % 4
-        if missing_padding:
-            audio_base64 += "=" * (4 - missing_padding)
-
-        file_content = base64.b64decode(audio_base64, validate=True)
-
-        if len(file_content) < 1000:
-            return {"error": "파일이 너무 작습니다. base64 데이터가 잘렸을 수 있습니다. analyze_sample_call을 사용하거나 공개 URL을 제공해주세요."}
-        if len(file_content) > 50 * 1024 * 1024:
-            return {"error": "파일이 너무 큽니다. 최대 50MB까지 지원합니다."}
-
-    except Exception as e:
-        return {"error": f"base64 디코딩 실패: {str(e)}. 파일이 잘렸을 수 있습니다."}
-
-    # S3 업로드
-    try:
-        content_types = {
-            ".mp3": "audio/mpeg",
-            ".wav": "audio/wav",
-            ".m4a": "audio/mp4",
-            ".ogg": "audio/ogg",
-            ".webm": "audio/webm"
-        }
-
-        file_key, file_url = await s3_service.upload_file(
-            file_content=file_content,
-            filename=filename,
-            folder="mcp-uploads",
-            content_type=content_types.get(file_ext, "audio/mpeg")
-        )
-
-        return {
-            "success": True,
-            "file_url": file_url,
-            "file_key": file_key,
-            "size_bytes": len(file_content),
-            "message": "업로드 완료. 이제 analyze_call_from_url 도구에 file_url을 전달하여 분석하세요."
-        }
-
-    except Exception as e:
-        return {"error": f"업로드 실패: {str(e)}"}
+with open('/mnt/data/파일명.mp3', 'rb') as f:
+    response = requests.post(
+        'https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
+        files={'file': ('파일명.mp3', f, 'audio/mpeg')}
+    )
+    result = response.json()
+    file_url = result['file_url']
+    print(f"업로드 완료: {file_url}")""",
+        "next_step": "업로드 후 file_url을 analyze_call_from_url 도구에 전달하세요"
+    }
 
 
 # Create Streamable HTTP app for mounting
