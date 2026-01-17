@@ -289,9 +289,12 @@ async def analyze_call(
 async def analyze_call_from_url(
     audio_url: str,
     my_speaker: Optional[str] = None,
-    consultation_type: str = "sales"
+    consultation_type: str = "sales",
+    quick_mode: bool = False
 ) -> dict:
     """URL에서 음성 파일을 다운로드하여 분석합니다."""
+    import time
+    start_time = time.time()
 
     # URL에서 파일명 추출
     try:
@@ -332,11 +335,13 @@ async def analyze_call_from_url(
             return {"error": "음성 파일이 너무 깁니다. (최대 30분)"}
 
         # 1. 전사 (STT)
+        stt_start = time.time()
         stt_service = AsyncSTTService()
         transcript_result = await stt_service.transcribe_with_progress(
             audio_file_path=str(file_path),
             language_code="ko"
         )
+        stt_time = time.time() - stt_start
 
         # 2. 분석 데이터 준비
         data = _prepare_analysis_data_from_dict(
@@ -346,6 +351,7 @@ async def analyze_call_from_url(
         )
 
         # 3. 종합 분석
+        analysis_start = time.time()
         analysis = await analysis_service.analyze_call(
             transcript_id=file_id,
             conversation_formatted=data["conversation_formatted"],
@@ -355,10 +361,13 @@ async def analyze_call_from_url(
             other_speakers=data["other_speakers"],
             script_context=None
         )
+        analysis_time = time.time() - analysis_start
 
         # 파일 삭제
         if file_path.exists():
             os.remove(file_path)
+
+        total_time = time.time() - start_time
 
         return {
             "transcript": {
@@ -368,7 +377,12 @@ async def analyze_call_from_url(
                 "utterances": transcript_result["utterances"],
                 "speakers": transcript_result["speakers"]
             },
-            "analysis": analysis
+            "analysis": analysis,
+            "processing_time": {
+                "stt_seconds": round(stt_time, 2),
+                "analysis_seconds": round(analysis_time, 2),
+                "total_seconds": round(total_time, 2)
+            }
         }
 
     except httpx.HTTPError as e:
