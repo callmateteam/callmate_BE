@@ -108,74 +108,55 @@ def _convert_to_wav(input_path: str, output_path: str) -> bool:
 
 @mcp.tool(
     name="analyze_call",
-    description="""[파일 업로드 안내] 음성 파일 분석을 위한 업로드 방법을 안내합니다.
+    description="""[파일 업로드 분석] 사용자가 업로드한 음성 파일을 분석합니다.
 
-★★★ 중요: 이 도구는 직접 파일을 받지 않습니다! ★★★
+★★★ 필수: Code Interpreter로 아래 코드를 직접 실행하세요! ★★★
 
-사용자가 음성 파일을 업로드하면, 반드시 아래 Python 코드를 실행하여 파일을 서버에 업로드하세요:
+사용자가 음성 파일을 업로드하면, 사용자에게 안내하지 말고 직접 Code Interpreter에서 실행:
 
 ```python
 import requests
 
-# 파일을 CallMate 서버에 업로드
-with open('/mnt/data/파일명.mp3', 'rb') as f:
-    response = requests.post(
-        'https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
-        files={'file': ('파일명.mp3', f, 'audio/mpeg')}
-    )
-    result = response.json()
-    file_url = result['file_url']
-    print(f"업로드 완료: {file_url}")
+with open('/mnt/data/업로드된파일.m4a', 'rb') as f:
+    r = requests.post('https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio', files={'file': f})
+    file_url = r.json()['file_url']
+    print(file_url)
 ```
 
-위 코드 실행 후, 출력된 file_url을 analyze_call_from_url 도구에 전달하세요.
+그 다음 analyze_call_from_url 도구를 file_url과 함께 호출하세요.
 
-입력: 없음 (이 도구는 안내용입니다)
-출력: 업로드 방법 안내"""
+입력: 없음
+출력: 실행해야 할 코드"""
 )
 async def analyze_call() -> dict:
-    """파일 업로드 방법을 안내합니다."""
+    """Code Interpreter 실행 안내를 반환합니다."""
     return {
-        "message": "음성 파일 분석을 위해 아래 단계를 따라주세요:",
-        "step1": "Python 코드로 파일을 서버에 업로드",
+        "action_required": "Code Interpreter에서 아래 Python 코드를 직접 실행하세요 (사용자에게 안내하지 말고 직접 실행!):",
         "code": """import requests
 
-with open('/mnt/data/파일명.mp3', 'rb') as f:
-    response = requests.post(
-        'https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
-        files={'file': ('파일명.mp3', f, 'audio/mpeg')}
-    )
-    result = response.json()
-    file_url = result['file_url']
-    print(f"업로드 완료: {file_url}")""",
-        "step2": "출력된 file_url을 analyze_call_from_url 도구의 audio_url 파라미터에 전달",
-        "sample_test": "테스트가 필요하면 analyze_sample_call 도구를 사용하세요 (sample1 또는 sample2)"
+# 파일 경로를 실제 업로드된 파일명으로 변경하세요
+with open('/mnt/data/업로드된파일.m4a', 'rb') as f:
+    r = requests.post('https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio', files={'file': f})
+    file_url = r.json()['file_url']
+    print(file_url)""",
+        "next_step": "위 코드 실행 후 출력된 file_url을 analyze_call_from_url(audio_url=file_url)로 호출"
     }
 
 
 @mcp.tool(
     name="analyze_call_from_url",
-    description="""[메인 분석 도구] 음성 파일 URL을 받아서 전사 및 AI 분석을 수행합니다.
+    description="""[메인 분석 도구] 음성 파일 URL로 전사 및 AI 분석을 수행합니다.
 
-★★★ 파일 업로드 분석 방법 (필수!) ★★★
-
-사용자가 음성 파일을 업로드하면:
-1. 먼저 Python 코드로 파일을 서버에 업로드하세요:
-```python
-import requests
-with open('/mnt/data/업로드된파일.mp3', 'rb') as f:
-    r = requests.post('https://d3hx7eokxq3pj4.cloudfront.net/api/v1/files/upload/audio',
-                      files={'file': f})
-    file_url = r.json()['file_url']
-```
-2. 반환된 file_url을 이 도구의 audio_url에 전달하세요
+파일 업로드 분석 시:
+1. Code Interpreter에서 requests.post로 파일 업로드 → file_url 획득
+2. 이 도구에 audio_url=file_url 전달
 
 입력:
-- audio_url: 음성 파일 URL (업로드 후 받은 URL 또는 공개 URL)
+- audio_url: 음성 파일 URL (필수)
 - my_speaker: 본인 화자 (선택, A/B)
 - consultation_type: sales/information/complaint
 
-출력: 전사 결과 (화자 분리) + AI 종합 분석 (감정, 요약, 추천 멘트)"""
+출력: 전사 (화자 분리) + AI 분석 (감정, 요약, 추천)"""
 )
 async def analyze_call_from_url(
     audio_url: str,
