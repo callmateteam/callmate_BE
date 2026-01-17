@@ -75,7 +75,6 @@ class AsyncSTTService:
             language=language_code,
             smart_format=True,
             diarize=True,
-            diarize_version="2023-09-19",  # 최신 화자 분리 모델로 정확도 향상
             punctuate=True,
             utterances=True,
             keywords=all_keywords,  # 키워드 인식률 향상
