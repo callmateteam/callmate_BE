@@ -434,6 +434,90 @@ async def analyze_sample_call(
 
 
 @mcp.tool(
+    name="transcribe_call",
+    description="""[빠른 전사 전용] 음성 파일을 텍스트로만 변환합니다. (AI 분석 없음)
+
+★ 빠른 결과가 필요할 때 사용하세요! (약 2-3초)
+
+분석 없이 전사만 필요한 경우:
+- "이 파일 텍스트로 변환해줘"
+- "대화 내용만 알려줘"
+- "빠르게 전사해줘"
+
+입력:
+- audio_url: 음성 파일 URL
+
+출력: 전사 결과만 (화자 분리 포함)"""
+)
+async def transcribe_call(
+    audio_url: str
+) -> dict:
+    """음성 파일을 텍스트로만 변환합니다 (분석 없음)."""
+    import time
+    start_time = time.time()
+
+    # URL에서 파일명 추출
+    try:
+        filename = audio_url.split("/")[-1].split("?")[0]
+        if not filename:
+            filename = "audio.mp3"
+    except:
+        filename = "audio.mp3"
+
+    file_ext = Path(filename).suffix.lower()
+    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus"}
+    if not file_ext or file_ext not in allowed_extensions:
+        file_ext = ".mp3"
+
+    # 파일 다운로드
+    upload_dir = Path(settings.UPLOAD_DIR)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    file_id = str(uuid.uuid4())
+    file_path = upload_dir / f"{file_id}{file_ext}"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.get(audio_url)
+            response.raise_for_status()
+            file_content = response.content
+
+        with open(file_path, "wb") as f:
+            f.write(file_content)
+
+        # 전사 (STT)만 실행
+        stt_service = AsyncSTTService()
+        transcript_result = await stt_service.transcribe_with_progress(
+            audio_file_path=str(file_path),
+            language_code="ko"
+        )
+
+        # 파일 삭제
+        if file_path.exists():
+            os.remove(file_path)
+
+        total_time = time.time() - start_time
+
+        return {
+            "file_id": file_id,
+            "duration_ms": transcript_result["duration"],
+            "full_text": transcript_result["full_text"],
+            "utterances": transcript_result["utterances"],
+            "speakers": transcript_result["speakers"],
+            "processing_seconds": round(total_time, 2)
+        }
+
+    except httpx.HTTPError as e:
+        if file_path.exists():
+            os.remove(file_path)
+        return {"error": f"URL에서 파일을 다운로드할 수 없습니다: {str(e)}"}
+    except Exception as e:
+        if file_path.exists():
+            os.remove(file_path)
+        return {"error": f"처리 중 오류 발생: {str(e)}"}
+
+
+@mcp.tool(
     name="upload_audio",
     description="""[파일 업로드 1단계] 음성 파일을 서버에 업로드하고 URL을 반환합니다.
 
