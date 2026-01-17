@@ -123,11 +123,26 @@ async def analyze_call(
     if file_ext not in allowed_extensions:
         return {"error": "지원하지 않는 파일 형식입니다. (mp3, wav, m4a만 가능)"}
 
-    # Base64 디코딩
+    # Base64 디코딩 (다양한 포맷 지원)
     try:
+        # data:audio/... 형식 처리
+        if "," in audio_base64 and audio_base64.startswith("data:"):
+            audio_base64 = audio_base64.split(",", 1)[1]
+
+        # URL-safe base64 및 패딩 처리
+        audio_base64 = audio_base64.replace("-", "+").replace("_", "/")
+        padding = 4 - len(audio_base64) % 4
+        if padding != 4:
+            audio_base64 += "=" * padding
+
         file_content = base64.b64decode(audio_base64)
-    except Exception:
-        return {"error": "잘못된 base64 데이터입니다."}
+
+        # 최소 파일 크기 검증 (1KB 이상)
+        if len(file_content) < 1024:
+            return {"error": "파일이 너무 작습니다. 올바른 음성 파일인지 확인해주세요."}
+
+    except Exception as e:
+        return {"error": f"잘못된 base64 데이터입니다: {str(e)}"}
 
     # 파일 저장
     upload_dir = Path(settings.UPLOAD_DIR)
