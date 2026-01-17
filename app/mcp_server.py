@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.utils.audio import get_audio_duration_ms
 from app.services.stt_service_async import AsyncSTTService
 from app.services.analysis_service import analysis_service
+from app.services.s3_service import s3_service
 
 
 # Create MCP server instance using official SDK's FastMCP
@@ -410,6 +411,97 @@ async def analyze_sample_call(
         my_speaker=my_speaker,
         consultation_type=consultation_type
     )
+
+
+@mcp.tool(
+    name="upload_audio",
+    description="""[파일 업로드 1단계] 음성 파일을 서버에 업로드하고 URL을 반환합니다.
+
+★★★ 대용량 파일 분석 시 이 도구를 먼저 사용하세요! ★★★
+
+사용 시나리오:
+1. 사용자가 음성 파일을 업로드함
+2. upload_audio로 파일을 서버에 업로드 → URL 반환
+3. analyze_call_from_url로 반환된 URL 분석
+
+사용 방법:
+```python
+import base64
+with open('/mnt/data/파일명.mp3', 'rb') as f:
+    audio_base64 = base64.b64encode(f.read()).decode('utf-8')
+```
+
+입력:
+- audio_base64: base64 인코딩된 음성 데이터
+- filename: 파일명 (예: "call.mp3")
+
+출력:
+- file_url: 분석에 사용할 URL (analyze_call_from_url에 전달)
+- file_key: 파일 식별자"""
+)
+async def upload_audio(
+    audio_base64: str,
+    filename: str = "audio.mp3"
+) -> dict:
+    """음성 파일을 S3에 업로드하고 URL을 반환합니다."""
+
+    # 파일 확장자 검증
+    allowed_extensions = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".oga", ".opus", ".aac", ".flac"}
+    file_ext = Path(filename).suffix.lower()
+    if not file_ext or file_ext not in allowed_extensions:
+        file_ext = ".mp3"
+        filename = f"audio{file_ext}"
+
+    # Base64 디코딩
+    try:
+        audio_base64 = audio_base64.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+
+        if "," in audio_base64 and "base64" in audio_base64.lower():
+            audio_base64 = audio_base64.split(",", 1)[1]
+
+        audio_base64 = audio_base64.replace("-", "+").replace("_", "/")
+
+        missing_padding = len(audio_base64) % 4
+        if missing_padding:
+            audio_base64 += "=" * (4 - missing_padding)
+
+        file_content = base64.b64decode(audio_base64, validate=True)
+
+        if len(file_content) < 1000:
+            return {"error": "파일이 너무 작습니다. base64 데이터가 잘렸을 수 있습니다. analyze_sample_call을 사용하거나 공개 URL을 제공해주세요."}
+        if len(file_content) > 50 * 1024 * 1024:
+            return {"error": "파일이 너무 큽니다. 최대 50MB까지 지원합니다."}
+
+    except Exception as e:
+        return {"error": f"base64 디코딩 실패: {str(e)}. 파일이 잘렸을 수 있습니다."}
+
+    # S3 업로드
+    try:
+        content_types = {
+            ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
+            ".m4a": "audio/mp4",
+            ".ogg": "audio/ogg",
+            ".webm": "audio/webm"
+        }
+
+        file_key, file_url = await s3_service.upload_file(
+            file_content=file_content,
+            filename=filename,
+            folder="mcp-uploads",
+            content_type=content_types.get(file_ext, "audio/mpeg")
+        )
+
+        return {
+            "success": True,
+            "file_url": file_url,
+            "file_key": file_key,
+            "size_bytes": len(file_content),
+            "message": "업로드 완료. 이제 analyze_call_from_url 도구에 file_url을 전달하여 분석하세요."
+        }
+
+    except Exception as e:
+        return {"error": f"업로드 실패: {str(e)}"}
 
 
 # Create Streamable HTTP app for mounting
